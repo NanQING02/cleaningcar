@@ -1,0 +1,128 @@
+{
+  "system": {
+    "device_id": "RK3588-DEV",
+    "api": {
+      "url": "http://10.201.28.40:9000/api/vehicle/wash-event",
+      "token": "",
+      "capture_mode": "base64"
+    },
+    "monitor_interval": 30
+  },
+  "video": {
+    "source": "/home/hinlink/下载/video/YYCJ25-348_YYCJ25-348_1_20251212133000_20251212151059_.avi",
+    "source_mode": "file",
+    "hw_decode": false,
+    "workers": 2,
+    "core_mask": "0-2",
+    "save_video": "./video_result/test02.mp4",
+    "csv": "./video_result/test02.csv",
+    "debug_frame_path": "/dev/shm/cleaningcar_debug.jpg",
+    "debug_frame_interval": 10,
+    "segment_minutes": 60
+  },
+  "zones": {
+    "zone_a_detection": [
+      [
+        0.012,
+        0.0148
+      ],
+      [
+        0.8808,
+        0.0034
+      ],
+      [
+        0.8789,
+        0.9927
+      ],
+      [
+        0.0083,
+        0.996
+      ]
+    ],
+    "zone_b_wash": [
+      [
+        0.4501,
+        0.53
+      ],
+      [
+        0.8835,
+        0.5825
+      ],
+      [
+        0.6673,
+        0.973
+      ],
+      [
+        0.0323,
+        0.9746
+      ],
+      [
+        0.0314,
+        0.8368
+      ]
+    ],
+    "flow_vector": {
+      "start": [
+        0.7292,
+        0.4595
+      ],
+      "end": [
+        0.3429,
+        0.8467
+      ]
+    }
+  },
+  "logic": {
+    "detection_anchor": "bottom_center",
+    "zone_a_mask_enable": true,
+    "zone_b_entry_hysteresis": 20,
+    "zone_b_exit_hysteresis": 3,
+    "stationary_min_frames": 0,
+    "stationary_speed_thresh": 8,
+    "type34_min_interval_frames": 60,
+    "track_timeout_frames": 180,
+    "track_max_age": 180,
+    "lane_name": "冲洗",
+    "vehicle_shrink_ratio": 0.35,
+    "vehicle_lock_min_votes": 40,
+    "vehicle_lock_on_confirm": true,
+    "plate_lock_frames": 5,
+    "default_plate_color": "",
+    "default_plate_color_conf": 0,
+    "default_cleanliness": 0,
+    "car_plate_cache_ttl": 90,
+    "shadow_plate_pool": {
+      "max_candidates": 50,
+      "max_age_frames": 120
+    },
+    "allowed_event_types": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "debug_overlay": true,
+    "debug_track_state": true,
+    "debug_anchor_points": true,
+    "debug_water_boxes": true,
+    "anchor_offset_ratio": 0.1,
+    "zone_b_anchor_min_frames": 10,
+    "wash_duration_offset_seconds": 0,
+    "vehicle_iou_threshold": 0.2,
+    "vehicle_center_gate_ratio": 0.3,
+    "disable_plate_only_events": true,
+    "single_lifecycle_events": true,
+    "min_zone_a_dwell_frames_for_type5": 25,
+    "min_track_frames_for_type1": 5,
+    "require_vehicle_type_for_events": true,
+    "min_zone_b_dwell_frames_for_type4": 60,
+    "enable_global_video": false,
+    "enable_per_id_video": true
+  },
+  "storage": {
+    "disk_threshold": 65,
+    "disk_target": 50,
+    "clean_interval_seconds": 600
+  }
+}

@@ -1,0 +1,142 @@
+LIBGL: Error while gathering supported extension (eglInitialize: EGL_NOT_INITIALIZED), default to none
+W rknn-toolkit-lite2 version: 2.3.2
+W Query dynamic range failed. Ret code: RKNN_ERR_MODEL_INVALID. (If it is a static shape RKNN model, please ignore the above warning message.)
+W rknn-toolkit-lite2 version: 2.3.2
+W Query dynamic range failed. Ret code: RKNN_ERR_MODEL_INVALID. (If it is a static shape RKNN model, please ignore the above warning message.)
+W rknn-toolkit-lite2 version: 2.3.2
+W Query dynamic range failed. Ret code: RKNN_ERR_MODEL_INVALID. (If it is a static shape RKNN model, please ignore the above warning message.)
+W rknn-toolkit-lite2 version: 2.3.2
+W Query dynamic range failed. Ret code: RKNN_ERR_MODEL_INVALID. (If it is a static shape RKNN model, please ignore the above warning message.)
+[reader] source_mode=file
+zone_a_mask: 启用，仅在Zone A内检测
+Worker 0: LPR model loaded from lprnet.rknn
+Worker 1: LPR model loaded from lprnet.rknn
+[monitor] cpu=0.0% mem=6.6% rss=129.4MB avg_cpu=0.0% max_cpu=0.0% avg_mem=6.6% max_mem=6.6% uptime=0s temp=31.5C
+[monitor] cpu=22.9% mem=8.6% rss=292.9MB avg_cpu=11.4% max_cpu=22.9% avg_mem=7.6% max_mem=8.6% uptime=2s temp=31.5C
+[monitor] cpu=19.2% mem=8.6% rss=294.3MB avg_cpu=14.0% max_cpu=22.9% avg_mem=7.9% max_mem=8.6% uptime=4s temp=31.5C
+[monitor] cpu=20.0% mem=8.7% rss=298.4MB avg_cpu=15.5% max_cpu=22.9% avg_mem=8.1% max_mem=8.7% uptime=6s temp=31.5C
+[monitor] cpu=19.4% mem=8.8% rss=307.9MB avg_cpu=16.3% max_cpu=22.9% avg_mem=8.3% max_mem=8.8% uptime=8s temp=31.5C
+[monitor] cpu=19.0% mem=8.8% rss=306.4MB avg_cpu=16.8% max_cpu=22.9% avg_mem=8.3% max_mem=8.8% uptime=10s temp=31.5C
+[monitor] cpu=19.5% mem=8.8% rss=307.9MB avg_cpu=17.1% max_cpu=22.9% avg_mem=8.4% max_mem=8.8% uptime=12s temp=32.4C
+[monitor] cpu=20.1% mem=9.3% rss=342.9MB avg_cpu=17.5% max_cpu=22.9% avg_mem=8.5% max_mem=9.3% uptime=14s temp=31.5C
+[EVENT] cam=RK3588-DEV track=1 type=1 time=2025-12-28 01:52:43
+[monitor] cpu=22.5% mem=9.1% rss=333.1MB avg_cpu=18.1% max_cpu=22.9% avg_mem=8.6% max_mem=9.3% uptime=16s temp=32.4C
+[monitor] cpu=27.2% mem=9.0% rss=324.1MB avg_cpu=19.0% max_cpu=27.2% avg_mem=8.6% max_mem=9.3% uptime=18s temp=31.5C
+[monitor] cpu=25.8% mem=8.9% rss=316.3MB avg_cpu=19.6% max_cpu=27.2% avg_mem=8.7% max_mem=9.3% uptime=20s temp=32.4C
+[monitor] cpu=26.4% mem=9.0% rss=323.6MB avg_cpu=20.2% max_cpu=27.2% avg_mem=8.7% max_mem=9.3% uptime=22s temp=32.4C
+[EVENT] cam=RK3588-DEV track=1 type=2 time=2025-12-28 01:52:49
+[monitor] cpu=27.9% mem=9.0% rss=321.7MB avg_cpu=20.8% max_cpu=27.9% avg_mem=8.7% max_mem=9.3% uptime=24s temp=32.4C
+[monitor] cpu=26.4% mem=9.0% rss=323.2MB avg_cpu=21.2% max_cpu=27.9% avg_mem=8.7% max_mem=9.3% uptime=26s temp=32.4C
+[monitor] cpu=27.1% mem=9.1% rss=331.0MB avg_cpu=21.6% max_cpu=27.9% avg_mem=8.8% max_mem=9.3% uptime=28s temp=32.4C
+[monitor] cpu=28.0% mem=9.2% rss=340.3MB avg_cpu=22.0% max_cpu=28.0% avg_mem=8.8% max_mem=9.3% uptime=30s temp=32.4C
+[monitor] cpu=27.0% mem=9.0% rss=323.5MB avg_cpu=22.3% max_cpu=28.0% avg_mem=8.8% max_mem=9.3% uptime=32s temp=32.4C
+[monitor] cpu=26.7% mem=9.0% rss=326.0MB avg_cpu=22.5% max_cpu=28.0% avg_mem=8.8% max_mem=9.3% uptime=34s temp=32.4C
+[monitor] cpu=26.9% mem=9.0% rss=324.7MB avg_cpu=22.7% max_cpu=28.0% avg_mem=8.8% max_mem=9.3% uptime=36s temp=32.4C
+[monitor] cpu=26.8% mem=9.1% rss=335.7MB avg_cpu=22.9% max_cpu=28.0% avg_mem=8.8% max_mem=9.3% uptime=38s temp=32.4C
+[monitor] cpu=27.6% mem=9.1% rss=332.7MB avg_cpu=23.2% max_cpu=28.0% avg_mem=8.8% max_mem=9.3% uptime=40s temp=32.4C
+[monitor] cpu=26.9% mem=9.0% rss=324.1MB avg_cpu=23.3% max_cpu=28.0% avg_mem=8.8% max_mem=9.3% uptime=42s temp=32.4C
+[monitor] cpu=26.5% mem=9.0% rss=326.9MB avg_cpu=23.5% max_cpu=28.0% avg_mem=8.9% max_mem=9.3% uptime=44s temp=32.4C
+[monitor] cpu=26.3% mem=9.1% rss=332.9MB avg_cpu=23.6% max_cpu=28.0% avg_mem=8.9% max_mem=9.3% uptime=46s temp=32.4C
+[monitor] cpu=26.6% mem=9.1% rss=328.4MB avg_cpu=23.7% max_cpu=28.0% avg_mem=8.9% max_mem=9.3% uptime=48s temp=32.4C
+[monitor] cpu=26.3% mem=9.1% rss=332.6MB avg_cpu=23.8% max_cpu=28.0% avg_mem=8.9% max_mem=9.3% uptime=50s temp=33.3C
+[monitor] cpu=25.8% mem=9.1% rss=331.2MB avg_cpu=23.9% max_cpu=28.0% avg_mem=8.9% max_mem=9.3% uptime=52s temp=33.3C
+[monitor] cpu=28.2% mem=9.2% rss=338.9MB avg_cpu=24.0% max_cpu=28.2% avg_mem=8.9% max_mem=9.3% uptime=54s temp=32.4C
+[monitor] cpu=25.1% mem=9.2% rss=341.8MB avg_cpu=24.1% max_cpu=28.2% avg_mem=8.9% max_mem=9.3% uptime=56s temp=32.4C
+[monitor] cpu=26.7% mem=9.2% rss=343.3MB avg_cpu=24.2% max_cpu=28.2% avg_mem=8.9% max_mem=9.3% uptime=58s temp=33.3C
+[monitor] cpu=26.1% mem=9.2% rss=339.2MB avg_cpu=24.2% max_cpu=28.2% avg_mem=8.9% max_mem=9.3% uptime=60s temp=33.3C
+[monitor] cpu=26.2% mem=9.2% rss=341.8MB avg_cpu=24.3% max_cpu=28.2% avg_mem=8.9% max_mem=9.3% uptime=63s temp=32.4C
+[monitor] cpu=26.3% mem=9.3% rss=344.9MB avg_cpu=24.3% max_cpu=28.2% avg_mem=9.0% max_mem=9.3% uptime=65s temp=33.3C
+[monitor] cpu=26.6% mem=9.2% rss=343.5MB avg_cpu=24.4% max_cpu=28.2% avg_mem=9.0% max_mem=9.3% uptime=67s temp=33.3C
+[monitor] cpu=24.8% mem=9.3% rss=346.5MB avg_cpu=24.4% max_cpu=28.2% avg_mem=9.0% max_mem=9.3% uptime=69s temp=33.3C
+[monitor] cpu=27.0% mem=9.3% rss=348.0MB avg_cpu=24.5% max_cpu=28.2% avg_mem=9.0% max_mem=9.3% uptime=71s temp=33.3C
+[monitor] cpu=27.1% mem=9.3% rss=346.5MB avg_cpu=24.6% max_cpu=28.2% avg_mem=9.0% max_mem=9.3% uptime=73s temp=33.3C
+[monitor] cpu=26.2% mem=9.3% rss=346.5MB avg_cpu=24.6% max_cpu=28.2% avg_mem=9.0% max_mem=9.3% uptime=75s temp=33.3C
+[monitor] cpu=26.7% mem=9.3% rss=348.0MB avg_cpu=24.7% max_cpu=28.2% avg_mem=9.0% max_mem=9.3% uptime=77s temp=33.3C
+[monitor] cpu=26.7% mem=9.3% rss=348.0MB avg_cpu=24.7% max_cpu=28.2% avg_mem=9.0% max_mem=9.3% uptime=79s temp=33.3C
+[monitor] cpu=27.0% mem=9.3% rss=345.2MB avg_cpu=24.8% max_cpu=28.2% avg_mem=9.0% max_mem=9.3% uptime=81s temp=33.3C
+[monitor] cpu=25.8% mem=9.3% rss=348.6MB avg_cpu=24.8% max_cpu=28.2% avg_mem=9.0% max_mem=9.3% uptime=83s temp=33.3C
+[monitor] cpu=25.6% mem=9.3% rss=351.2MB avg_cpu=24.8% max_cpu=28.2% avg_mem=9.0% max_mem=9.3% uptime=85s temp=33.3C
+[monitor] cpu=25.2% mem=9.3% rss=351.2MB avg_cpu=24.8% max_cpu=28.2% avg_mem=9.0% max_mem=9.3% uptime=87s temp=33.3C
+[monitor] cpu=26.3% mem=9.3% rss=351.2MB avg_cpu=24.9% max_cpu=28.2% avg_mem=9.0% max_mem=9.3% uptime=89s temp=33.3C
+[monitor] cpu=26.6% mem=9.3% rss=351.3MB avg_cpu=24.9% max_cpu=28.2% avg_mem=9.0% max_mem=9.3% uptime=91s temp=33.3C
+[monitor] cpu=26.2% mem=9.4% rss=351.3MB avg_cpu=24.9% max_cpu=28.2% avg_mem=9.1% max_mem=9.4% uptime=93s temp=33.3C
+[monitor] cpu=26.0% mem=9.3% rss=351.4MB avg_cpu=24.9% max_cpu=28.2% avg_mem=9.1% max_mem=9.4% uptime=95s temp=33.3C
+[monitor] cpu=25.5% mem=9.3% rss=348.5MB avg_cpu=25.0% max_cpu=28.2% avg_mem=9.1% max_mem=9.4% uptime=97s temp=33.3C
+[monitor] cpu=25.7% mem=9.4% rss=351.4MB avg_cpu=25.0% max_cpu=28.2% avg_mem=9.1% max_mem=9.4% uptime=99s temp=33.3C
+[monitor] cpu=27.5% mem=9.3% rss=351.4MB avg_cpu=25.0% max_cpu=28.2% avg_mem=9.1% max_mem=9.4% uptime=101s temp=33.3C
+[monitor] cpu=27.6% mem=9.3% rss=349.8MB avg_cpu=25.1% max_cpu=28.2% avg_mem=9.1% max_mem=9.4% uptime=103s temp=33.3C
+[monitor] cpu=26.6% mem=9.3% rss=349.8MB avg_cpu=25.1% max_cpu=28.2% avg_mem=9.1% max_mem=9.4% uptime=105s temp=33.3C
+[monitor] cpu=27.4% mem=9.3% rss=348.5MB avg_cpu=25.1% max_cpu=28.2% avg_mem=9.1% max_mem=9.4% uptime=107s temp=33.3C
+[monitor] cpu=27.4% mem=9.4% rss=352.9MB avg_cpu=25.2% max_cpu=28.2% avg_mem=9.1% max_mem=9.4% uptime=109s temp=33.3C
+[monitor] cpu=26.4% mem=9.4% rss=354.6MB avg_cpu=25.2% max_cpu=28.2% avg_mem=9.1% max_mem=9.4% uptime=111s temp=33.3C
+[monitor] cpu=27.6% mem=9.5% rss=361.2MB avg_cpu=25.2% max_cpu=28.2% avg_mem=9.1% max_mem=9.5% uptime=113s temp=33.3C
+[monitor] cpu=27.0% mem=9.4% rss=354.6MB avg_cpu=25.3% max_cpu=28.2% avg_mem=9.1% max_mem=9.5% uptime=115s temp=34.2C
+[monitor] cpu=26.5% mem=9.4% rss=359.3MB avg_cpu=25.3% max_cpu=28.2% avg_mem=9.1% max_mem=9.5% uptime=117s temp=33.3C
+[monitor] cpu=26.3% mem=9.4% rss=359.0MB avg_cpu=25.3% max_cpu=28.2% avg_mem=9.1% max_mem=9.5% uptime=119s temp=33.3C
+[monitor] cpu=26.4% mem=9.4% rss=353.1MB avg_cpu=25.3% max_cpu=28.2% avg_mem=9.1% max_mem=9.5% uptime=121s temp=33.3C
+[monitor] cpu=27.2% mem=9.5% rss=363.8MB avg_cpu=25.4% max_cpu=28.2% avg_mem=9.1% max_mem=9.5% uptime=123s temp=33.3C
+[monitor] cpu=26.7% mem=9.5% rss=360.7MB avg_cpu=25.4% max_cpu=28.2% avg_mem=9.1% max_mem=9.5% uptime=125s temp=33.3C
+[monitor] cpu=27.5% mem=9.5% rss=363.8MB avg_cpu=25.4% max_cpu=28.2% avg_mem=9.1% max_mem=9.5% uptime=127s temp=33.3C
+[monitor] cpu=27.3% mem=9.5% rss=362.3MB avg_cpu=25.4% max_cpu=28.2% avg_mem=9.1% max_mem=9.5% uptime=129s temp=33.3C
+[monitor] cpu=26.7% mem=9.5% rss=366.9MB avg_cpu=25.5% max_cpu=28.2% avg_mem=9.2% max_mem=9.5% uptime=131s temp=34.2C
+[monitor] cpu=26.3% mem=9.5% rss=362.3MB avg_cpu=25.5% max_cpu=28.2% avg_mem=9.2% max_mem=9.5% uptime=133s temp=33.3C
+[monitor] cpu=26.7% mem=9.5% rss=364.0MB avg_cpu=25.5% max_cpu=28.2% avg_mem=9.2% max_mem=9.5% uptime=135s temp=33.3C
+[monitor] cpu=27.5% mem=9.5% rss=368.6MB avg_cpu=25.5% max_cpu=28.2% avg_mem=9.2% max_mem=9.5% uptime=137s temp=33.3C
+[monitor] cpu=27.3% mem=9.5% rss=362.6MB avg_cpu=25.5% max_cpu=28.2% avg_mem=9.2% max_mem=9.5% uptime=139s temp=33.3C
+[monitor] cpu=26.3% mem=9.5% rss=361.0MB avg_cpu=25.6% max_cpu=28.2% avg_mem=9.2% max_mem=9.5% uptime=141s temp=33.3C
+[monitor] cpu=27.0% mem=9.5% rss=362.3MB avg_cpu=25.6% max_cpu=28.2% avg_mem=9.2% max_mem=9.5% uptime=143s temp=33.3C
+[monitor] cpu=27.0% mem=9.5% rss=362.2MB avg_cpu=25.6% max_cpu=28.2% avg_mem=9.2% max_mem=9.5% uptime=145s temp=33.3C
+[monitor] cpu=25.6% mem=9.6% rss=375.9MB avg_cpu=25.6% max_cpu=28.2% avg_mem=9.2% max_mem=9.6% uptime=147s temp=33.3C
+[monitor] cpu=25.8% mem=9.8% rss=389.3MB avg_cpu=25.6% max_cpu=28.2% avg_mem=9.2% max_mem=9.8% uptime=149s temp=33.3C
+[monitor] cpu=24.1% mem=9.8% rss=389.3MB avg_cpu=25.6% max_cpu=28.2% avg_mem=9.2% max_mem=9.8% uptime=151s temp=33.3C
+[monitor] cpu=24.4% mem=9.8% rss=389.3MB avg_cpu=25.6% max_cpu=28.2% avg_mem=9.2% max_mem=9.8% uptime=153s temp=33.3C
+[monitor] cpu=24.6% mem=9.9% rss=393.9MB avg_cpu=25.6% max_cpu=28.2% avg_mem=9.2% max_mem=9.9% uptime=155s temp=34.2C
+[EVENT] cam=RK3588-DEV track=1 type=3 time=2025-12-28 01:52:55
+[EVENT] cam=RK3588-DEV track=1 type=4 time=2025-12-28 01:54:35
+[EVENT] cam=RK3588-DEV track=1 type=5 time=2025-12-28 01:54:35
+[monitor] cpu=24.3% mem=9.8% rss=389.3MB avg_cpu=25.5% max_cpu=28.2% avg_mem=9.2% max_mem=9.9% uptime=157s temp=33.3C
+[monitor] cpu=20.2% mem=9.8% rss=389.3MB avg_cpu=25.5% max_cpu=28.2% avg_mem=9.2% max_mem=9.9% uptime=159s temp=33.3C
+[monitor] cpu=19.7% mem=9.8% rss=386.3MB avg_cpu=25.4% max_cpu=28.2% avg_mem=9.2% max_mem=9.9% uptime=161s temp=33.3C
+[monitor] cpu=20.5% mem=9.9% rss=392.5MB avg_cpu=25.3% max_cpu=28.2% avg_mem=9.3% max_mem=9.9% uptime=163s temp=34.2C
+[monitor] cpu=20.3% mem=9.8% rss=386.3MB avg_cpu=25.3% max_cpu=28.2% avg_mem=9.3% max_mem=9.9% uptime=165s temp=33.3C
+[monitor] cpu=18.8% mem=9.8% rss=386.3MB avg_cpu=25.2% max_cpu=28.2% avg_mem=9.3% max_mem=9.9% uptime=168s temp=33.3C
+[monitor] cpu=20.2% mem=9.8% rss=386.3MB avg_cpu=25.1% max_cpu=28.2% avg_mem=9.3% max_mem=9.9% uptime=170s temp=33.3C
+[monitor] cpu=19.7% mem=9.8% rss=389.4MB avg_cpu=25.1% max_cpu=28.2% avg_mem=9.3% max_mem=9.9% uptime=172s temp=34.2C
+[reader] local file reached EOF or failed, stopping.
+[monitor] cpu=16.8% mem=9.8% rss=386.6MB avg_cpu=25.0% max_cpu=28.2% avg_mem=9.3% max_mem=9.9% uptime=174s temp=33.3C
+Video /home/ztl/cleaningcar_v2/video/003.mp4: frames=3004 elapsed=173.78s (17.29 FPS)
+Average inference 57.25 ms over 3004 frames
+Worker 0: frames=1502 infer_ms=57.26 throughput=8.64 FPS
+Worker 1: frames=1502 infer_ms=57.24 throughput=8.64 FPS
+LIBGL: Initialising gl4es
+LIBGL: v1.1.5 built on Aug 21 2023 01:26:58
+LIBGL: Using GLES 2.0 backend
+LIBGL: loaded: libGLESv2.so
+LIBGL: loaded: libEGL.so
+LIBGL: Using GLES 2.0 backend
+arm_release_ver: g24p0-00eac0, rk_so_ver: 10
+LIBGL: Targeting OpenGL 2.1
+LIBGL: Not trying to batch small subsequent glDrawXXXX
+LIBGL: try to use VBO
+LIBGL: Force texture for Attachment color0 on FBO
+LIBGL: Hack to trigger a SwapBuffers when a Full Framebuffer Blit on default FBO is done
+LIBGL: glX Will try to recycle EGL Surface
+LIBGL: Current folder is:/home/ztl/cleaningcar_v2
+LIBGL: Not using PSA (prgbin_n=0, notexarray=0)
+I RKNN: [01:52:31.108] RKNN Runtime Information, librknnrt version: 2.3.2 (429f97ae6b@2025-04-09T09:09:27)
+I RKNN: [01:52:31.108] RKNN Driver Information, version: 0.9.8
+I RKNN: [01:52:31.108] RKNN Model Information, version: 6, toolkit version: 2.3.2(compiler version: 2.3.2 (e045de294f@2025-04-07T19:48:25)), target: RKNPU v2, target platform: rk3588, framework name: ONNX, framework layout: NCHW, model inference type: static_shape
+W RKNN: [01:52:31.126] query RKNN_QUERY_INPUT_DYNAMIC_RANGE error, rknn model is static shape type, please export rknn with dynamic_shapes
+I RKNN: [01:52:31.318] RKNN Runtime Information, librknnrt version: 2.3.2 (429f97ae6b@2025-04-09T09:09:27)
+I RKNN: [01:52:31.318] RKNN Driver Information, version: 0.9.8
+I RKNN: [01:52:31.318] RKNN Model Information, version: 6, toolkit version: 2.3.2(compiler version: 2.3.2 (e045de294f@2025-04-07T19:48:25)), target: RKNPU v2, target platform: rk3588, framework name: ONNX, framework layout: NCHW, model inference type: static_shape
+W RKNN: [01:52:31.323] query RKNN_QUERY_INPUT_DYNAMIC_RANGE error, rknn model is static shape type, please export rknn with dynamic_shapes
+I RKNN: [01:52:31.529] RKNN Runtime Information, librknnrt version: 2.3.2 (429f97ae6b@2025-04-09T09:09:27)
+I RKNN: [01:52:31.529] RKNN Driver Information, version: 0.9.8
+I RKNN: [01:52:31.530] RKNN Model Information, version: 6, toolkit version: 2.3.2(compiler version: 2.3.2 (e045de294f@2025-04-07T19:48:25)), target: RKNPU v2, target platform: rk3588, framework name: ONNX, framework layout: NCHW, model inference type: static_shape
+W RKNN: [01:52:31.547] query RKNN_QUERY_INPUT_DYNAMIC_RANGE error, rknn model is static shape type, please export rknn with dynamic_shapes
+I RKNN: [01:52:31.742] RKNN Runtime Information, librknnrt version: 2.3.2 (429f97ae6b@2025-04-09T09:09:27)
+I RKNN: [01:52:31.742] RKNN Driver Information, version: 0.9.8
+I RKNN: [01:52:31.742] RKNN Model Information, version: 6, toolkit version: 2.3.2(compiler version: 2.3.2 (e045de294f@2025-04-07T19:48:25)), target: RKNPU v2, target platform: rk3588, framework name: ONNX, framework layout: NCHW, model inference type: static_shape
+W RKNN: [01:52:31.747] query RKNN_QUERY_INPUT_DYNAMIC_RANGE error, rknn model is static shape type, please export rknn with dynamic_shapes
+LIBGL: Shuting down

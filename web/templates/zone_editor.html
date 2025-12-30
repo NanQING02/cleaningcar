@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>CleaningCar 配置控制台</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "Segoe UI", "PingFang SC", sans-serif;
+    }
+    body { margin: 0; background: #121417; color: #e0e0e0; }
+    header { padding: 16px 28px; background: #191d23; border-bottom: 1px solid #242931; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+    header h1 { margin: 0; font-size: 20px; }
+    main { padding: 20px 28px 60px; display: flex; flex-direction: column; gap: 24px; }
+    .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+    .panel { background: #1c2129; border: 1px solid #2a313d; border-radius: 10px; padding: 16px; box-shadow: 0 6px 16px rgba(0,0,0,0.25); }
+    .panel h3 { margin-top: 0; font-size: 17px; }
+    label { display: block; font-size: 13px; margin-top: 8px; }
+    input, select { width: 100%; padding: 6px 8px; margin-top: 4px; background: #0f1115; border: 1px solid #2f3541; border-radius: 6px; color: #f3f3f3; }
+    button { border: none; border-radius: 6px; padding: 8px 14px; margin-right: 6px; margin-top: 8px; cursor: pointer; font-weight: 600; color: #fff; background: #2f7cf8; }
+    button.secondary { background: #3b3f45; }
+    button.danger { background: #d9534f; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .canvas-wrapper { background: #0f1115; border-radius: 12px; border: 1px solid #2a313d; padding: 16px; }
+    canvas { width: 100%; max-width: 1080px; height: auto; border: 1px solid #313844; border-radius: 8px; background-color: #050607; cursor: crosshair; }
+    .mode-buttons { margin-bottom: 12px; }
+    .mode-buttons button { margin-bottom: 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+    th, td { border: 1px solid #2f3541; padding: 4px 6px; text-align: left; }
+    .log-table { max-height: 220px; overflow-y: auto; margin-bottom: 12px; }
+    .log-section { margin-top: 12px; }
+    .debug-img { width: 100%; max-width: 100%; border: 1px solid #2a313d; border-radius: 8px; background: #000; }
+    .status-bar { position: fixed; bottom: 0; left: 0; right: 0; padding: 10px 28px; background: rgba(18,20,23,0.92); border-top: 1px solid #2a313d; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+    .hint { font-size: 12px; line-height: 1.4; color: #9aa3b5; }
+    .mode-label { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #2f3541; font-size: 12px; margin-left: 8px; }
+    .header-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: 13px; }
+    .header-controls label { margin-top: 0; }
+    .header-select { min-width: 180px; }
+    .header-link { color: #8ab4ff; text-decoration: none; padding-top: 4px; }
+    .header-link:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>CleaningCar Web 控制台<span class="mode-label">{{ modeLabel }}</span></h1>
+      <div class="header-controls">
+        <label class="header-select">
+          场景配置
+          <select v-model="selectedConfig" @change="onConfigChange">
+            <option v-for="file in configFiles" :key="file" :value="file">
+              {{ file === activeConfig ? file + '（当前）' : file }}
+            </option>
+          </select>
+        </label>
+        <button @click="saveConfigAs" :disabled="busy">另存为配置</button>
+        <button class="secondary" @click="toggleLogicView">
+          {{ logicView ? '关闭逻辑界面' : '打开逻辑界面' }}
+        </button>
+        <button class="secondary" @click="openLogsPage">查看日志</button>
+      </div>
+    </header>
+    <main>
+      <div class="panels">
+        <section class="panel">
+          <h3>系统 &amp; 视频参数</h3>
+          <label>设备 ID
+            <input v-model="form.system.device_id" placeholder="RK3588-XXX" />
+          </label>
+          <label>API 地址
+            <input v-model="form.system.api.url" placeholder="https://example/api" />
+          </label>
+          <label>API Token
+            <input v-model="form.system.api.token" placeholder="token" />
+          </label>
+          <label>视频源（RTSP/本地文件）
+            <input v-model="form.video.source" placeholder="rtsp://... 或 /path/video.mp4" />
+          </label>
+          <label>
+            <input type="checkbox" v-model="form.video.hw_decode" />
+            启用硬件解码 (GStreamer+mpp)
+          </label>
+          <label>保存录像路径 (可选)
+            <input v-model="form.video.save_video" placeholder="./video_result/cam.mp4" />
+          </label>
+          <label>
+            <input type="checkbox" v-model="form.logic.enable_global_video" />
+            启用全局录像保存
+          </label>
+          <label>
+            <input type="checkbox" v-model="form.logic.enable_per_id_video" />
+            启用按车辆ID录像保存
+          </label>
+          <label>CSV 输出路径 (可选)
+            <input v-model="form.video.csv" placeholder="./video_result/cam.csv" />
+          </label>
+          <label>调试帧保存路径 (实时画面)
+            <input v-model="form.video.debug_frame_path" placeholder="./debug/latest.jpg" />
+          </label>
+          <label>调试帧刷新间隔 (帧)
+            <input type="number" min="1" v-model.number="form.video.debug_frame_interval" />
+          </label>
+          <div>
+            <button @click="saveConfig" :disabled="busy">保存配置</button>
+            <button class="secondary" @click="reloadFrame" :disabled="busy">刷新背景帧</button>
+            <button class="secondary" @click="restartInference" :disabled="busy">重启推理</button>
+          </div>
+          <p class="hint">提示：保存配置后无需重启 Web，仅推理进程需重启一次。</p>
+        </section>
+        <section class="panel">
+          <h3>推理守护进程</h3>
+          <p class="hint">通过 Guardian 控制 run_zone_detect.py，无需接显示器即可远程维护推理进程。</p>
+          <p>状态：<strong>{{ inferenceStatusText }}</strong>
+            <span v-if="inferenceStatus.pid">(PID {{ inferenceStatus.pid }})</span>
+          </p>
+          <p>上次启动：{{ formatTimestamp(inferenceStatus.last_start) }}</p>
+          <p>上次退出：{{ formatExit(inferenceStatus.last_exit) }}</p>
+          <p>累计重启：{{ inferenceStatus.restart_count || 0 }}</p>
+          <label>
+            <input type="checkbox" v-model="inferenceAutoRestart" @change="setAutoRestart" /> 自动重启
+          </label>
+          <div>
+            <button @click="startInference" :disabled="busy">启动</button>
+            <button class="secondary" @click="stopInference" :disabled="busy">停止</button>
+            <button class="secondary" @click="restartInference" :disabled="busy">重启</button>
+            <button class="secondary" @click="refreshInferenceLogs" :disabled="busy">刷新日志</button>
+          </div>
+          <div class="log-section">
+            <h4>推理日志</h4>
+            <div class="log-table" v-if="inferenceLogs.length">
+              <table>
+                <thead>
+                  <tr>
+                    <th>时间</th>
+                    <th>内容</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="entry in inferenceLogs" :key="entry.timestamp">
+                    <td>{{ entry.timestamp }}</td>
+                    <td>{{ entry.line }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="hint" v-else>暂无推理日志，点击“刷新日志”获取最新输出。</p>
+          </div>
+        </section>
+        <section class="panel" v-if="logicView">
+          <h3>逻辑阈值</h3>
+          <label>Zone A 掩膜开关
+            <select v-model="form.logic.zone_a_mask_enable">
+              <option :value="true">开启（推荐）</option>
+              <option :value="false">关闭</option>
+            </select>
+          </label>
+          <label>进入/退出 Zone B 防抖帧数
+            <input type="number" min="1" v-model.number="form.logic.zone_b_entry_hysteresis" />
+          </label>
+          <label>静止判断最小帧 (Type3)
+            <input type="number" min="0" v-model.number="form.logic.stationary_min_frames" />
+          </label>
+          <label>Type3/4 重复触发最小间隔帧
+            <input type="number" min="1" v-model.number="form.logic.type34_min_interval_frames" />
+          </label>
+          <label>Track 超时时间 (帧)
+            <input type="number" min="30" v-model.number="form.logic.track_timeout_frames" />
+          </label>
+          <label>车辆跟踪 IoU 阈值 (0-1)
+            <input type="number" min="0" max="1" step="0.01" v-model.number="form.logic.vehicle_iou_threshold" />
+          </label>
+          <label>车辆中心门控比例 (0-1, 0关闭)
+            <input type="number" min="0" max="1" step="0.01" v-model.number="form.logic.vehicle_center_gate_ratio" />
+          </label>
+          <label>Type1 最小 Zone A 停留帧数 (0关闭)
+            <input type="number" min="0" v-model.number="form.logic.min_track_frames_for_type1" />
+          </label>
+          <label>Type5 最小 Zone A 停留帧数 (0关闭)
+            <input type="number" min="0" v-model.number="form.logic.min_zone_a_dwell_frames_for_type5" />
+          </label>
+          <label>
+            <input type="checkbox" v-model="form.logic.require_vehicle_type_for_events" />
+            仅在已锁定车型时允许触发 Type1-5
+          </label>
+          <label>锚点上移比例 (0-0.9)
+            <input type="number" min="0" max="0.9" step="0.01" v-model.number="form.logic.anchor_offset_ratio" />
+          </label>
+          <label>Zone B 锚点延迟帧
+            <input type="number" min="0" v-model.number="form.logic.zone_b_anchor_min_frames" />
+          </label>
+          <label>影子车牌池大小
+            <input type="number" min="10" v-model.number="form.logic.shadow_plate_pool.max_candidates" />
+          </label>
+          <label>
+            <input type="checkbox" v-model="form.logic.debug_overlay" />
+            开启调试覆盖（Zone/水雾/锚点）
+          </label>
+          <label>
+            <input type="checkbox" v-model="form.logic.debug_track_state" />
+            绘制跟踪状态文本
+          </label>
+          <label>
+            <input type="checkbox" v-model="form.logic.debug_anchor_points" />
+            显示底部锚点
+          </label>
+          <label>
+            <input type="checkbox" v-model="form.logic.debug_water_boxes" />
+            显示水雾/人工清洗检测框
+          </label>
+          <div>
+            <button @click="saveConfig" :disabled="busy">保存逻辑参数</button>
+          </div>
+          <p class="hint">所有参数均直接写入 config.json，可通过 Git/备份追踪历史。</p>
+        </section>
+        <section class="panel">
+          <h3>绘制说明</h3>
+          <ul class="hint">
+            <li>单击画布添加顶点；拖动顶点可微调；按 Delete 键删除最近的一个顶点。</li>
+            <li>切换到“流向箭头”后，可拖动起点/终点，或在空白处单击重新定位。</li>
+            <li>点击“保存区域”后即写入 config.json，推理进程需重启一次生效。</li>
+            <li>可在任意电脑浏览器访问： http://设备IP:8000 </li>
+          </ul>
+          <div>
+            <button class="secondary" @click="undoVertex">撤销最近顶点</button>
+            <button class="secondary" @click="resetZone">重置当前区域</button>
+            <button @click="saveZones" :disabled="busy">保存区域</button>
+          </div>
+          <h3>实时调试画面</h3>
+          <p class="hint">推理脚本每隔固定帧写入 <code>{{ form.video.debug_frame_path || './debug/latest.jpg' }}</code>；点击刷新查看最新叠加结果（Zone/锚点/水雾）。</p>
+          <img v-if="debugImageUrl" :src="debugImageUrl" alt="调试画面" class="debug-img"/>
+          <p class="hint">{{ debugFrameStatus }}</p>
+          <div>
+            <button class="secondary" @click="refreshDebugImage" :disabled="busy">刷新实时画面</button>
+          </div>
+        </section>
+      </div>
+      <section class="canvas-wrapper">
+        <div class="mode-buttons">
+          <button :class="{secondary: editMode!=='zone_a'}" @click="setMode('zone_a')">编辑 Zone A</button>
+          <button :class="{secondary: editMode!=='zone_b'}" @click="setMode('zone_b')">编辑 Zone B</button>
+          <button :class="{secondary: editMode!=='flow'}" @click="setMode('flow')">编辑流向箭头</button>
+        </div>
+        <canvas ref="canvas" width="960" height="540"
+          :style="canvasStyle"
+          @mousedown="onMouseDown"
+          @mousemove="onMouseMove"
+          @mouseup="onMouseUp"
+          @mouseleave="onMouseUp"
+          ></canvas>
+      </section>
+    </main>
+    <div class="status-bar">
+      <span>{{ status }}</span>
+      <span v-if="lastSave">上次保存：{{ lastSave }}</span>
+    </div>
+  </div>
+
+  <script>
+    const { createApp } = Vue;
+    createApp({
+      data() {
+        return {
+          form: {
+            system: { device_id: '', monitor_interval: 2.0, api: { url: '', token: '', capture_mode: 'path' } },
+            video: { source: '', source_mode: 'auto', hw_decode: false, workers: 2, core_mask: '0-2', save_video: '', csv: '', debug_frame_path: '', debug_frame_interval: 10 },
+            logic: {
+              detection_anchor: 'bottom_center',
+              zone_a_mask_enable: true,
+              zone_b_entry_hysteresis: 3,
+              zone_b_exit_hysteresis: 3,
+              stationary_min_frames: 0,
+              type34_min_interval_frames: 5,
+              track_timeout_frames: 90,
+              vehicle_iou_threshold: 0.3,
+              vehicle_center_gate_ratio: 0.0,
+              enable_global_video: true,
+              enable_per_id_video: false,
+              min_track_frames_for_type1: 5,
+              min_zone_a_dwell_frames_for_type5: 25,
+              disable_plate_only_events: true,
+              single_lifecycle_events: true,
+              require_vehicle_type_for_events: false,
+              shadow_plate_pool: { max_candidates: 50, max_age_frames: 120 },
+              debug_overlay: false,
+              debug_track_state: false,
+              debug_anchor_points: false,
+              debug_water_boxes: false
+            },
+            zones: {
+              zone_a_detection: [],
+              zone_b_wash: [],
+              flow_vector: { start: [0.5, 0.2], end: [0.5, 0.8] }
+            }
+          },
+          status: '初始化中…',
+          lastSave: '',
+          busy: false,
+          editMode: 'zone_a',
+          canvas: null,
+          ctx: null,
+          dragging: null,
+          backgroundUrl: '',
+          frameSize: { w: 960, h: 540 },
+          debugImageUrl: '',
+          debugFrameStatus: '未加载',
+          inferenceStatus: { running: false, pid: null, last_start: null, last_exit: null, restart_count: 0 },
+          inferenceAutoRestart: true,
+          inferenceLogs: [],
+          inferenceStatusTimer: null,
+          inferenceLogTimer: null,
+          configFiles: [],
+          selectedConfig: '',
+          activeConfig: '',
+          logicView: false
+        };
+      },
+      computed: {
+        modeLabel() {
+          if (this.editMode === 'zone_a') return 'Zone A';
+          if (this.editMode === 'zone_b') return 'Zone B';
+          return '流向箭头';
+        },
+        inferenceStatusText() {
+          return this.inferenceStatus.running ? '运行中' : '已停止';
+        },
+        canvasStyle() {
+          const bg = this.backgroundUrl ? `url(${this.backgroundUrl})` : 'none';
+          return {
+            backgroundImage: bg,
+            backgroundSize: 'contain',
+            backgroundRepeat: 'no-repeat',
+            backgroundPosition: 'center'
+          };
+        }
+      },
+      mounted() {
+        this.canvas = this.$refs.canvas;
+        this.ctx = this.canvas.getContext('2d');
+        this.bindKeyboard();
+        try {
+          const params = new URLSearchParams(window.location.search || '');
+          this.logicView = params.get('logic') === '1';
+        } catch (e) {
+          this.logicView = false;
+        }
+        this.loadConfigFiles();
+        this.loadFrame();
+        this.loadConfig();
+        this.refreshDebugImage();
+        this.fetchInferenceStatus();
+        this.refreshInferenceLogs();
+        this.inferenceStatusTimer = setInterval(() => this.fetchInferenceStatus(), 5000);
+        this.inferenceLogTimer = setInterval(() => this.refreshInferenceLogs(true), 8000);
+      },
+      beforeUnmount() {
+        if (this.inferenceStatusTimer) clearInterval(this.inferenceStatusTimer);
+        if (this.inferenceLogTimer) clearInterval(this.inferenceLogTimer);
+      },
+      methods: {
+        bindKeyboard() {
+          window.addEventListener('keydown', (e) => {
+            if (e.key === 'Delete') {
+              this.undoVertex();
+            }
+          });
+        },
+        async saveConfigAs() {
+          const base = this.selectedConfig || this.activeConfig || 'config_client.json';
+          const suggested = base.replace(/\.json$/i, '') || 'config_client';
+          const name = window.prompt('保存为配置文件名（不含路径）：', suggested);
+          if (!name) {
+            return;
+          }
+          this.busy = true;
+          this.status = '正在另存配置…';
+          try {
+            const payload = {
+              name,
+              data: this.form
+            };
+            const res = await fetch('/config/save_as', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+              let msg = '保存失败';
+              try {
+                const data = await res.json();
+                if (data && data.detail) {
+                  msg = data.detail;
+                }
+              } catch (e) {}
+              throw new Error(msg);
+            }
+            const data = await res.json();
+            this.status = `已保存为 ${data.saved_as}`;
+            await this.loadConfigFiles();
+            this.selectedConfig = data.saved_as;
+            await this.onConfigChange();
+          } catch (err) {
+            this.status = err.message;
+          } finally {
+            this.busy = false;
+          }
+        },
+        async loadConfigFiles() {
+          try {
+            const res = await fetch('/config/files');
+            if (!res.ok) return;
+            const data = await res.json();
+            this.configFiles = data.files || [];
+            this.activeConfig = data.active || '';
+            if (!this.selectedConfig && this.activeConfig) {
+              this.selectedConfig = this.activeConfig;
+            }
+          } catch (err) {
+          }
+        },
+        async loadConfig() {
+          try {
+            const res = await fetch('/config');
+            if (!res.ok) throw new Error('读取配置失败');
+            const data = await res.json();
+            this.form = JSON.parse(JSON.stringify(data));
+            this.ensureDefaults();
+            this.repaint();
+            this.status = '配置已加载';
+            this.refreshDebugImage();
+          } catch (err) {
+            this.status = err.message;
+          }
+        },
+        ensureDefaults() {
+          const z = this.form.zones || {};
+          z.zone_a_detection = z.zone_a_detection || [];
+          z.zone_b_wash = z.zone_b_wash || [];
+          z.flow_vector = z.flow_vector || { start: [0.5, 0.2], end: [0.5, 0.8] };
+          this.form.zones = z;
+          this.form.logic.shadow_plate_pool = this.form.logic.shadow_plate_pool || { max_candidates: 50, max_age_frames: 120 };
+          this.form.video.debug_frame_path = this.form.video.debug_frame_path || '';
+          this.form.video.debug_frame_interval = this.form.video.debug_frame_interval || 10;
+          this.form.logic.debug_overlay = !!this.form.logic.debug_overlay;
+          this.form.logic.debug_track_state = !!(this.form.logic.debug_track_state || this.form.logic.debug_overlay);
+          this.form.logic.debug_anchor_points = !!(this.form.logic.debug_anchor_points || this.form.logic.debug_overlay);
+          if (typeof this.form.logic.require_vehicle_type_for_events === 'undefined') {
+            this.form.logic.require_vehicle_type_for_events = false;
+          }
+          if (typeof this.form.logic.enable_global_video === 'undefined') {
+            this.form.logic.enable_global_video = true;
+          }
+          if (typeof this.form.logic.enable_per_id_video === 'undefined') {
+            this.form.logic.enable_per_id_video = false;
+          }
+          this.form.logic.debug_water_boxes = !!(this.form.logic.debug_water_boxes || this.form.logic.debug_overlay);
+          if (typeof this.form.logic.anchor_offset_ratio !== 'number') {
+            this.form.logic.anchor_offset_ratio = 0;
+          }
+          if (typeof this.form.logic.zone_b_anchor_min_frames !== 'number') {
+            this.form.logic.zone_b_anchor_min_frames = 0;
+          }
+        },
+        async saveConfig() {
+          this.busy = true;
+          this.status = '保存配置中…';
+          try {
+            const payload = {
+              system: this.form.system,
+              video: this.form.video,
+              logic: this.form.logic
+            };
+            const res = await fetch('/config', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) throw new Error('保存失败');
+            this.lastSave = new Date().toLocaleString();
+            this.status = '配置已保存';
+          } catch (err) {
+            this.status = err.message;
+          } finally {
+            this.busy = false;
+          }
+        },
+        async onConfigChange() {
+          if (!this.selectedConfig) {
+            return;
+          }
+          this.busy = true;
+          this.status = '切换配置中…';
+          try {
+            const res = await fetch('/config/select', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: this.selectedConfig })
+            });
+            if (!res.ok) throw new Error('切换配置失败');
+            const data = await res.json();
+            this.activeConfig = data.active || this.selectedConfig;
+            await this.loadConfig();
+            await this.loadFrame();
+            this.refreshDebugImage();
+            this.status = '配置已切换';
+          } catch (err) {
+            this.status = err.message;
+          } finally {
+            this.busy = false;
+          }
+        },
+       async saveZones() {
+          this.busy = true;
+          this.status = '保存区域中…';
+          try {
+            const payload = this.form.zones;
+            const res = await fetch('/zones', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) throw new Error('保存区域失败');
+            this.lastSave = new Date().toLocaleString();
+            this.status = '区域已保存';
+          } catch (err) {
+            this.status = err.message;
+          } finally {
+            this.busy = false;
+          }
+        },
+       async reloadFrame() {
+          this.busy = true;
+          this.status = '刷新背景帧…';
+          try {
+            await fetch('/frame/reload', { method: 'POST' });
+            await this.loadFrame();
+            this.status = '背景帧已刷新';
+          } catch (err) {
+            this.status = '刷新失败';
+          } finally {
+            this.busy = false;
+          }
+        },
+        async inferenceAction(endpoint, actionLabel, successLabel) {
+          this.busy = true;
+          this.status = `${actionLabel}…`;
+          try {
+            const res = await fetch(endpoint, { method: 'POST' });
+            if (!res.ok) throw new Error(`${actionLabel}失败`);
+            const data = await res.json();
+            this.inferenceStatus = data;
+            this.inferenceAutoRestart = !!data.auto_restart;
+            this.status = successLabel || `${actionLabel}完成`;
+            this.refreshInferenceLogs(true);
+          } catch (err) {
+            this.status = err.message;
+          } finally {
+            this.busy = false;
+          }
+        },
+        async startInference() {
+          await this.inferenceAction('/inference/start', '启动推理', '推理已启动');
+        },
+        async stopInference() {
+          await this.inferenceAction('/inference/stop', '停止推理', '推理已停止');
+        },
+        async restartInference() {
+          await this.inferenceAction('/inference/restart', '重启推理', '推理已重启');
+        },
+        async fetchInferenceStatus() {
+          try {
+            const res = await fetch('/inference/status');
+            if (!res.ok) throw new Error('获取推理状态失败');
+            const data = await res.json();
+            this.inferenceStatus = data;
+            this.inferenceAutoRestart = !!data.auto_restart;
+          } catch (err) {
+            this.status = err.message;
+          }
+        },
+        async setAutoRestart(evt) {
+          const prev = this.inferenceAutoRestart;
+          if (evt && evt.target) {
+            this.inferenceAutoRestart = evt.target.checked;
+          }
+          try {
+            const enabled = this.inferenceAutoRestart ? 'true' : 'false';
+            const res = await fetch(`/inference/auto_restart?enable=${enabled}`, { method: 'POST' });
+            if (!res.ok) throw new Error('设置自动重启失败');
+            this.status = `自动重启 ${this.inferenceAutoRestart ? '已开启' : '已关闭'}`;
+          } catch (err) {
+            this.inferenceAutoRestart = prev;
+            this.status = err.message;
+          }
+        },
+        async refreshInferenceLogs(silent = false) {
+          if (!silent) {
+            this.status = '加载推理日志…';
+          }
+          try {
+            const res = await fetch('/logs/inference?lines=200');
+            if (!res.ok) throw new Error('读取推理日志失败');
+            const data = await res.json();
+            this.inferenceLogs = data.lines || [];
+            if (!silent) {
+              this.status = '推理日志已刷新';
+            }
+          } catch (err) {
+            this.inferenceLogs = [];
+            this.status = err.message;
+          }
+        },
+        formatTimestamp(ts) {
+          if (!ts && ts !== 0) return '—';
+          const date = new Date(ts * 1000);
+          if (Number.isNaN(date.getTime())) return '—';
+          return date.toLocaleString();
+        },
+        formatExit(info) {
+          if (!info || !info.time) return '—';
+          const base = this.formatTimestamp(info.time);
+          if (typeof info.code === 'number') {
+            return `${base} (code ${info.code})`;
+          }
+          return base;
+        },
+       async loadFrame() {
+          const metaRes = await fetch('/frame_meta');
+          const meta = await metaRes.json();
+          if (!meta.available) {
+            this.status = '背景帧不可用，请先配置视频源';
+            return;
+          }
+          this.canvas.width = meta.width;
+          this.canvas.height = meta.height;
+          this.frameSize = { w: meta.width, h: meta.height };
+          this.backgroundUrl = `/frame?ts=${Date.now()}`;
+          this.repaint();
+        },
+       setMode(mode) {
+          this.editMode = mode;
+          this.status = `当前编辑：${this.modeLabel}`;
+        },
+        getActivePolygon() {
+          return this.editMode === 'zone_a'
+            ? this.form.zones.zone_a_detection
+            : this.form.zones.zone_b_wash;
+        },
+        toNorm(pt) {
+          return [+(pt.x / this.canvas.width).toFixed(4), +(pt.y / this.canvas.height).toFixed(4)];
+        },
+        toPx(norm) {
+          return { x: norm[0] * this.canvas.width, y: norm[1] * this.canvas.height };
+        },
+        onMouseDown(evt) {
+          const pt = this.eventPoint(evt);
+          if (this.editMode === 'flow') {
+            const handle = this.hitFlowHandle(pt);
+            if (handle) {
+              this.dragging = { type: 'flow', handle };
+            } else {
+              this.setFlowHandle('end', pt);
+            }
+            return;
+          }
+          const hit = this.hitVertex(pt);
+          if (hit) {
+            this.dragging = { type: 'vertex', poly: hit.poly, index: hit.index };
+          } else {
+            this.addVertex(pt);
+          }
+        },
+        onMouseMove(evt) {
+          if (!this.dragging) return;
+          const pt = this.eventPoint(evt);
+          if (this.dragging.type === 'vertex') {
+            const poly = this.dragging.poly;
+            poly[this.dragging.index] = this.toNorm(pt);
+            this.repaint();
+          } else if (this.dragging.type === 'flow') {
+            this.setFlowHandle(this.dragging.handle, pt);
+          }
+        },
+        onMouseUp() {
+          this.dragging = null;
+        },
+        eventPoint(evt) {
+          const rect = this.canvas.getBoundingClientRect();
+          const scaleX = this.canvas.width / rect.width;
+          const scaleY = this.canvas.height / rect.height;
+          return {
+            x: (evt.clientX - rect.left) * scaleX,
+            y: (evt.clientY - rect.top) * scaleY
+          };
+        },
+        hitVertex(pt) {
+          const threshold = 12;
+          const poly = this.getActivePolygon();
+          for (let i = 0; i < poly.length; i++) {
+            const px = this.toPx(poly[i]);
+            if (this.dist(px, pt) < threshold) {
+              return { poly, index: i };
+            }
+          }
+          return null;
+        },
+        hitFlowHandle(pt) {
+          const start = this.toPx(this.form.zones.flow_vector.start);
+          const end = this.toPx(this.form.zones.flow_vector.end);
+          if (this.dist(start, pt) < 18) return 'start';
+          if (this.dist(end, pt) < 18) return 'end';
+          return null;
+        },
+        setFlowHandle(handle, pt) {
+          const norm = this.toNorm(pt);
+          this.form.zones.flow_vector[handle] = norm;
+          this.repaint();
+        },
+        addVertex(pt) {
+          const poly = this.getActivePolygon();
+          poly.push(this.toNorm(pt));
+          this.repaint();
+        },
+        undoVertex() {
+          if (this.editMode === 'flow') return;
+          const poly = this.getActivePolygon();
+          if (poly.length > 0) {
+            poly.pop();
+            this.repaint();
+          }
+        },
+       resetZone() {
+          if (this.editMode === 'flow') {
+            this.form.zones.flow_vector = { start: [0.5, 0.2], end: [0.5, 0.8] };
+          } else if (this.editMode === 'zone_a') {
+            this.form.zones.zone_a_detection = [];
+          } else {
+            this.form.zones.zone_b_wash = [];
+          }
+          this.repaint();
+        },
+        dist(a, b) {
+          return Math.hypot(a.x - b.x, a.y - b.y);
+        },
+        drawPolygon(poly, color) {
+          if (!poly || poly.length < 3) return;
+          this.ctx.fillStyle = color;
+          this.ctx.strokeStyle = color;
+          this.ctx.beginPath();
+          poly.forEach((norm, idx) => {
+            const pt = this.toPx(norm);
+            if (idx === 0) this.ctx.moveTo(pt.x, pt.y);
+            else this.ctx.lineTo(pt.x, pt.y);
+          });
+          this.ctx.closePath();
+          this.ctx.globalAlpha = 0.3;
+          this.ctx.fill();
+          this.ctx.globalAlpha = 1;
+          this.ctx.stroke();
+          poly.forEach(norm => {
+            const pt = this.toPx(norm);
+            this.ctx.beginPath();
+            this.ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
+            this.ctx.fill();
+          });
+        },
+        drawFlow() {
+          const start = this.toPx(this.form.zones.flow_vector.start);
+          const end = this.toPx(this.form.zones.flow_vector.end);
+          this.ctx.strokeStyle = '#00bfff';
+          this.ctx.fillStyle = '#00bfff';
+          this.ctx.lineWidth = 2;
+          this.ctx.beginPath();
+          this.ctx.moveTo(start.x, start.y);
+          this.ctx.lineTo(end.x, end.y);
+          this.ctx.stroke();
+          const angle = Math.atan2(end.y - start.y, end.x - start.x);
+          this.ctx.beginPath();
+          this.ctx.moveTo(end.x, end.y);
+          this.ctx.lineTo(end.x - 12 * Math.cos(angle - Math.PI / 6), end.y - 12 * Math.sin(angle - Math.PI / 6));
+          this.ctx.lineTo(end.x - 12 * Math.cos(angle + Math.PI / 6), end.y - 12 * Math.sin(angle + Math.PI / 6));
+          this.ctx.closePath();
+          this.ctx.fill();
+          [start, end].forEach(pt => {
+            this.ctx.beginPath();
+            this.ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2);
+            this.ctx.fill();
+          });
+          this.ctx.lineWidth = 1;
+        },
+       repaint() {
+          if (!this.ctx) return;
+          this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+          this.drawPolygon(this.form.zones.zone_a_detection, 'rgba(0,200,0,0.9)');
+          this.drawPolygon(this.form.zones.zone_b_wash, 'rgba(220,80,80,0.9)');
+          this.drawFlow();
+        },
+        async refreshDebugImage() {
+          this.debugFrameStatus = '加载中…';
+          try {
+            const res = await fetch(`/debug_frame_meta?ts=${Date.now()}`);
+            if (!res.ok) throw new Error('请求失败');
+            const data = await res.json();
+            if (!data.available) {
+              this.debugImageUrl = '';
+              this.debugFrameStatus = '尚无调试帧，请先在配置里设置 debug_frame_path';
+              return;
+            }
+            const updated = data.updated ? new Date(data.updated * 1000) : new Date();
+            this.debugFrameStatus = `最新时间：${updated.toLocaleString()} (${data.path || ''})`;
+            this.debugImageUrl = `/debug_frame?ts=${Date.now()}`;
+          } catch (err) {
+            this.debugImageUrl = '';
+            this.debugFrameStatus = err.message;
+          }
+        },
+        toggleLogicView() {
+          this.logicView = !this.logicView;
+          try {
+            const url = new URL(window.location.href);
+            if (this.logicView) {
+              url.searchParams.set('logic', '1');
+            } else {
+              url.searchParams.delete('logic');
+            }
+            window.history.replaceState(null, '', url.toString());
+          } catch (e) {
+          }
+        },
+        openLogsPage() {
+          window.open('/logs', '_blank');
+        }
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>

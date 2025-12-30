@@ -1,0 +1,39 @@
+W rknn-toolkit-lite2 version: 2.3.2
+W Query dynamic range failed. Ret code: RKNN_ERR_MODEL_INVALID. (If it is a static shape RKNN model, please ignore the above warning message.)
+W rknn-toolkit-lite2 version: 2.3.2
+W Query dynamic range failed. Ret code: RKNN_ERR_MODEL_INVALID. (If it is a static shape RKNN model, please ignore the above warning message.)
+W rknn-toolkit-lite2 version: 2.3.2
+W Query dynamic range failed. Ret code: RKNN_ERR_MODEL_INVALID. (If it is a static shape RKNN model, please ignore the above warning message.)
+W rknn-toolkit-lite2 version: 2.3.2
+W Query dynamic range failed. Ret code: RKNN_ERR_MODEL_INVALID. (If it is a static shape RKNN model, please ignore the above warning message.)
+hardware decode pipeline failed, fallback to default OpenCV source
+[reader] source_mode=file
+zone_a_mask: 启用，仅在Zone A内检测
+Worker 0: LPR model loaded from lprnet.rknn
+Worker 1: LPR model loaded from lprnet.rknn
+[EVENT] cam=RK3588-DEV track=1 type=1 time=2025-12-26 04:30:55
+[EVENT] cam=RK3588-DEV track=1 type=2 time=2025-12-26 04:31:01
+[EVENT] cam=RK3588-DEV track=1 type=3 time=2025-12-26 04:31:07
+[EVENT] cam=RK3588-DEV track=1 type=4 time=2025-12-26 04:32:47
+[EVENT] cam=RK3588-DEV track=1 type=5 time=2025-12-26 04:32:47
+[reader] local file reached EOF or failed, stopping.
+Video /home/hinlink/下载/video/003.mp4: frames=3004 elapsed=93.35s (32.18 FPS)
+Average inference 34.54 ms over 3004 frames
+Worker 0: frames=1500 infer_ms=34.59 throughput=16.07 FPS
+Worker 1: frames=1504 infer_ms=34.49 throughput=16.11 FPS
+I RKNN: [04:30:42.888] RKNN Runtime Information, librknnrt version: 2.3.2 (429f97ae6b@2025-04-09T09:09:27)
+I RKNN: [04:30:42.888] RKNN Driver Information, version: 0.9.8
+I RKNN: [04:30:42.889] RKNN Model Information, version: 6, toolkit version: 2.3.2(compiler version: 2.3.2 (e045de294f@2025-04-07T19:48:25)), target: RKNPU v2, target platform: rk3588, framework name: ONNX, framework layout: NCHW, model inference type: static_shape
+W RKNN: [04:30:42.904] query RKNN_QUERY_INPUT_DYNAMIC_RANGE error, rknn model is static shape type, please export rknn with dynamic_shapes
+I RKNN: [04:30:43.014] RKNN Runtime Information, librknnrt version: 2.3.2 (429f97ae6b@2025-04-09T09:09:27)
+I RKNN: [04:30:43.014] RKNN Driver Information, version: 0.9.8
+I RKNN: [04:30:43.014] RKNN Model Information, version: 6, toolkit version: 2.3.2(compiler version: 2.3.2 (e045de294f@2025-04-07T19:48:25)), target: RKNPU v2, target platform: rk3588, framework name: ONNX, framework layout: NCHW, model inference type: static_shape
+W RKNN: [04:30:43.018] query RKNN_QUERY_INPUT_DYNAMIC_RANGE error, rknn model is static shape type, please export rknn with dynamic_shapes
+I RKNN: [04:30:43.139] RKNN Runtime Information, librknnrt version: 2.3.2 (429f97ae6b@2025-04-09T09:09:27)
+I RKNN: [04:30:43.139] RKNN Driver Information, version: 0.9.8
+I RKNN: [04:30:43.140] RKNN Model Information, version: 6, toolkit version: 2.3.2(compiler version: 2.3.2 (e045de294f@2025-04-07T19:48:25)), target: RKNPU v2, target platform: rk3588, framework name: ONNX, framework layout: NCHW, model inference type: static_shape
+W RKNN: [04:30:43.156] query RKNN_QUERY_INPUT_DYNAMIC_RANGE error, rknn model is static shape type, please export rknn with dynamic_shapes
+I RKNN: [04:30:43.270] RKNN Runtime Information, librknnrt version: 2.3.2 (429f97ae6b@2025-04-09T09:09:27)
+I RKNN: [04:30:43.270] RKNN Driver Information, version: 0.9.8
+I RKNN: [04:30:43.270] RKNN Model Information, version: 6, toolkit version: 2.3.2(compiler version: 2.3.2 (e045de294f@2025-04-07T19:48:25)), target: RKNPU v2, target platform: rk3588, framework name: ONNX, framework layout: NCHW, model inference type: static_shape
+W RKNN: [04:30:43.275] query RKNN_QUERY_INPUT_DYNAMIC_RANGE error, rknn model is static shape type, please export rknn with dynamic_shapes
