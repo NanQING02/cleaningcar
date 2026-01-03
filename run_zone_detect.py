@@ -270,28 +270,20 @@ class FfmpegH264Writer:
             '-',
             '-an',
         ]
-        if encoder == 'h264_rkmpp':
-            opts = [
-                '-c:v',
-                'h264_rkmpp',
-                '-pix_fmt',
-                'yuv420p',
-            ]
-        else:
-            opts = [
-                '-c:v',
-                'libx264',
-                '-profile:v',
-                'baseline',
-                '-level',
-                '3.1',
-                '-preset',
-                'veryfast',
-                '-crf',
-                '28',
-                '-pix_fmt',
-                'yuv420p',
-            ]
+        opts = [
+            '-c:v',
+            'libx264',
+            '-profile:v',
+            'baseline',
+            '-level',
+            '3.1',
+            '-preset',
+            'veryfast',
+            '-crf',
+            '28',
+            '-pix_fmt',
+            'yuv420p',
+        ]
         tail = [
             '-movflags',
             '+faststart',
@@ -317,9 +309,8 @@ class FfmpegH264Writer:
             return False
 
     def _start(self):
-        for enc in ('h264_rkmpp', 'libx264'):
-            if self._try_start(enc):
-                return
+        if self._try_start('libx264'):
+            return
         print(f'[per-id-video] no available H.264 encoder for {self.path}')
 
     def is_opened(self):
@@ -1113,6 +1104,7 @@ class EventManager:
         self.base_time = datetime.now()
         self.stationary_min_frames = int(config.get('stationary_min_frames', 0))
         self.stationary_speed_thresh = float(config.get('stationary_speed_thresh', 8.0))
+        self.min_water_hit_frames_for_wash = int(self.logic.get('min_water_hit_frames_for_wash', 60))
         self.type34_min_interval = int(config.get('type34_min_interval_frames', 5))
         self.vehicle_shrink_ratio = float(config.get('vehicle_shrink_ratio', 0.35))
         self.vehicle_lock_min_votes = int(config.get('vehicle_lock_min_votes', 80))
@@ -1194,6 +1186,7 @@ class EventManager:
             'washing_candidate': False,
             'washing_confirmed': False,
             'water_detected': False,
+            'water_hit_frames': 0,
             'last_frame_idx': frame_idx,
             'last_frame': None,
             'plate_text': '',
@@ -1339,6 +1332,7 @@ class EventManager:
             st['zone_b_dwell_frames'] = 0
             st['water_detected'] = False
             st['wash_duration'] = 0.0
+            st['water_hit_frames'] = 0
         enter_frame = st.get('zone_b_enter_frame', -1)
         anchor_elapsed = 0
         if inside_b:
@@ -1358,9 +1352,12 @@ class EventManager:
             st['washing_candidate'] = False
         else:
             st['washing_candidate'] = True
+        if inside_b and water_hit:
+            st['water_hit_frames'] = st.get('water_hit_frames', 0) + 1
+        water_ready = st.get('water_hit_frames', 0) >= self.min_water_hit_frames_for_wash
         stationary_ready = (self.stationary_min_frames > 0 and
                             st['stationary_frames'] >= self.stationary_min_frames)
-        trigger_ready = bool(water_signal or stationary_ready)
+        trigger_ready = bool(water_ready)
         if water_signal:
             st['water_detected'] = True
         was_washing = bool(st.get('washing'))
