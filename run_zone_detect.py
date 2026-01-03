@@ -111,6 +111,7 @@ FFMPEG_PIX_BYTES = {
     'bgr24': 3,
     'rgb24': 3,
 }
+ENABLE_PER_ID_LEGACY_WRITER = False
 ENABLE_DISK_CLEANER = False
 
 
@@ -146,10 +147,12 @@ def load_config(path):
     zones = mgr.zones
     storage = mgr.storage
     shadow_cfg = logic.get('shadow_plate_pool', {})
+    event_capture_dir = mgr.data.get('event_capture_dir', './captures')
+    event_output_dir = mgr.data.get('event_output_dir', './events')
     merged = {
         'camera_id': system.get('device_id', 'RK3588'),
-        'event_capture_dir': str(Path('./captures')),
-        'event_output_dir': str(Path('./events')),
+        'event_capture_dir': str(Path(event_capture_dir)),
+        'event_output_dir': str(Path(event_output_dir)),
         'api_url': system.get('api', {}).get('url', ''),
         'api_token': system.get('api', {}).get('token', ''),
         'capture_mode': system.get('api', {}).get('capture_mode', 'path'),
@@ -206,6 +209,7 @@ def apply_cli_overrides(args, config):
     maybe_set('capture_mode', cfg.get('capture_mode'))
     logic = (config or {}).get('logic', {})
     maybe_set('plate_lock_frames', logic.get('plate_lock_frames'))
+    maybe_set('no_draw', logic.get('no_draw'))
 
 
 def apply_class_thresholds_from_config(config):
@@ -236,6 +240,123 @@ def apply_class_thresholds_from_config(config):
         if idx < 0 or idx >= len(CLASS_NAMES):
             continue
         CLASS_THRESH[idx] = thresh
+
+
+class FfmpegH264Writer:
+    def __init__(self, path, width, height, fps):
+        self.path = str(path)
+        self.width = int(width)
+        self.height = int(height)
+        self.fps = float(fps)
+        self.proc = None
+        self.stdin = None
+        self.encoder = None
+        self._opened = False
+        self._start()
+
+    def _build_cmd(self, encoder):
+        base = [
+            'ffmpeg',
+            '-y',
+            '-f',
+            'rawvideo',
+            '-pix_fmt',
+            'bgr24',
+            '-s',
+            f'{self.width}x{self.height}',
+            '-r',
+            f'{self.fps}',
+            '-i',
+            '-',
+            '-an',
+        ]
+        if encoder == 'h264_rkmpp':
+            opts = [
+                '-c:v',
+                'h264_rkmpp',
+                '-pix_fmt',
+                'yuv420p',
+            ]
+        else:
+            opts = [
+                '-c:v',
+                'libx264',
+                '-profile:v',
+                'baseline',
+                '-level',
+                '3.1',
+                '-preset',
+                'veryfast',
+                '-crf',
+                '28',
+                '-pix_fmt',
+                'yuv420p',
+            ]
+        tail = [
+            '-movflags',
+            '+faststart',
+            self.path,
+        ]
+        return base + opts + tail
+
+    def _try_start(self, encoder):
+        cmd = self._build_cmd(encoder)
+        try:
+            self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+            self.stdin = self.proc.stdin
+            self.encoder = encoder
+            self._opened = True
+            print(f'[per-id-video] using ffmpeg encoder={encoder} path={self.path}')
+            return True
+        except Exception as exc:
+            self.proc = None
+            self.stdin = None
+            self.encoder = None
+            self._opened = False
+            print(f'[per-id-video] failed to start ffmpeg encoder {encoder} for {self.path}: {exc}')
+            return False
+
+    def _start(self):
+        for enc in ('h264_rkmpp', 'libx264'):
+            if self._try_start(enc):
+                return
+        print(f'[per-id-video] no available H.264 encoder for {self.path}')
+
+    def is_opened(self):
+        if not self._opened or not self.proc or not self.stdin:
+            return False
+        if self.proc.poll() is not None:
+            return False
+        return True
+
+    def write(self, frame):
+        if not self.is_opened():
+            return
+        if frame is None:
+            return
+        try:
+            self.stdin.write(frame.tobytes())
+        except Exception as exc:
+            print(f'[per-id-video] write failed for {self.path}: {exc}')
+            self.release()
+
+    def release(self):
+        if self.stdin:
+            try:
+                self.stdin.close()
+            except Exception:
+                pass
+            self.stdin = None
+        if self.proc:
+            try:
+                self.proc.wait(timeout=5.0)
+            except Exception:
+                try:
+                    self.proc.kill()
+                except Exception:
+                    pass
+            self.proc = None
+        self._opened = False
 def parse_args():
     ap = argparse.ArgumentParser(description='Multithread RKNN detector demo.')
     ap.add_argument('--model', default='best.rknn')
@@ -312,7 +433,6 @@ def parse_core_mask(text: str):
 
 
 def open_video_capture(src, hw_decode=False):
-    """Try hardware decode via GStreamer+mpp first, fallback to OpenCV default."""
     if hw_decode and isinstance(src, str):
         if src.startswith(('rtsp://', 'rtsps://')):
             pipeline = (
@@ -336,60 +456,6 @@ def open_video_capture(src, hw_decode=False):
             return cap
         print('hardware decode pipeline failed, fallback to default OpenCV source')
     return cv2.VideoCapture(src)
-
-
-class SegmentedVideoWriter:
-    """Video writer that rotates files every N minutes."""
-
-    def __init__(self, base_path, fps, frame_size, segment_minutes=60, fourcc='mp4v'):
-        self.base_path = Path(base_path)
-        if self.base_path.suffix:
-            self.ext = self.base_path.suffix
-            self.base_name = self.base_path.stem
-        else:
-            self.ext = '.mp4'
-            self.base_name = self.base_path.name or 'segment'
-        self.dir = self.base_path.parent if str(self.base_path.parent) not in ('', '.') else Path('.')
-        self.dir.mkdir(parents=True, exist_ok=True)
-        self.fps = float(fps)
-        self.frame_size = frame_size
-        self.segment_minutes = max(1, int(segment_minutes))
-        self.frames_per_segment = max(1, int(self.fps * 60 * self.segment_minutes))
-        self.fourcc = cv2.VideoWriter_fourcc(*fourcc)
-        self.writer = None
-        self.frames_written = 0
-        self.segment_index = 0
-
-    def _next_filename(self):
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        name = f"{self.base_name}_{timestamp}_{self.segment_index:03d}{self.ext}"
-        self.segment_index += 1
-        return self.dir / name
-
-    def _open_writer(self):
-        if self.writer:
-            self.writer.release()
-        filename = self._next_filename()
-        self.writer = cv2.VideoWriter(str(filename), self.fourcc, self.fps, self.frame_size)
-        if not self.writer.isOpened():
-            print(f'[video] warning: cannot open writer {filename}, disabling video output')
-            self.writer = None
-        self.frames_written = 0
-
-    def write(self, frame):
-        if self.writer is None:
-            self._open_writer()
-            if self.writer is None:
-                return
-        self.writer.write(frame)
-        self.frames_written += 1
-        if self.frames_written >= self.frames_per_segment:
-            self._open_writer()
-
-    def release(self):
-        if self.writer:
-            self.writer.release()
-            self.writer = None
 
 
 def create_video_reader(path, args):
@@ -1094,6 +1160,7 @@ class EventManager:
         self.disable_plate_only_events = True
         self.single_lifecycle_events = True
         self.require_vehicle_type_for_events = bool(self.logic.get('require_vehicle_type_for_events', False))
+        self.max_per_id_video_seconds = 600.0
         self.pending_events = {}
         self.upload_buffer = {}
         self.upload_qualified = set()
@@ -1153,6 +1220,7 @@ class EventManager:
             'zone_a_enter_frame': -1,
             'zone_a_dwell_frames': 0,
             'track_frame_count': 0,
+            'abnormal_reasons': set(),
         })
         if self.single_lifecycle_events and st.get('closed'):
             st['last_frame_idx'] = frame_idx
@@ -1357,6 +1425,16 @@ class EventManager:
             st['wash_end_time'] = st.get('wash_end_time') or timestamp
             duration_val = self._compute_effective_wash_duration(st, frame_idx)
             st['wash_duration'] = duration_val
+            reasons = st.get('abnormal_reasons')
+            if reasons is None:
+                reasons = set()
+                st['abnormal_reasons'] = reasons
+            if 2 not in st['events']:
+                reasons.add('MISSING_TYPE2')
+            if st.get('water_detected') and 3 not in st['events']:
+                reasons.add('MISSING_TYPE3')
+            if st.get('zone_b_dwell_frames', 0) > 0 and 4 not in st['events']:
+                reasons.add('MISSING_TYPE4')
             self.emit_event(track_id, 5, frame_idx, frame, {
                 'captureTime': timestamp,
                 'washDuration': round(duration_val, 2),
@@ -1381,6 +1459,63 @@ class EventManager:
             'zone_b_elapsed': anchor_elapsed,
             'water_detected': bool(st.get('water_detected')),
         }
+
+        elapsed_seconds = st.get('track_frame_count', 0) / max(self.fps, 1e-6)
+        if elapsed_seconds >= self.max_per_id_video_seconds and not st.get('closed'):
+            reasons = st.get('abnormal_reasons')
+            if reasons is None:
+                reasons = set()
+                st['abnormal_reasons'] = reasons
+            if 'OVER_10_MINUTES' not in reasons:
+                reasons.add('OVER_10_MINUTES')
+            if st.get('record_start_frame') is not None and st.get('record_stop_frame') is None:
+                extra_frames = int(max(self.fps, 1.0) * 5.0)
+                last_idx = st.get('last_frame_idx', frame_idx)
+                stop_frame = last_idx + extra_frames
+                prev_stop = st.get('record_stop_frame')
+                if prev_stop is None or stop_frame > prev_stop:
+                    st['record_stop_frame'] = stop_frame
+            if self.uploader:
+                track_key = f'{self.camera_id}_{track_id}'
+                buffer = self.upload_buffer.pop(track_key, [])
+                if buffer:
+                    updated = []
+                    for p in buffer:
+                        payload = dict(p)
+                        payload['isAbnormal'] = True
+                        old_reason = str(payload.get('abnormalReason') or '').strip()
+                        if old_reason:
+                            parts = set(r for r in old_reason.split('|') if r)
+                        else:
+                            parts = set()
+                        parts.add('OVER_10_MINUTES')
+                        payload['abnormalReason'] = '|'.join(sorted(parts))
+                        updated.append(payload)
+                    self.upload_qualified.add(track_key)
+                    for payload in updated:
+                        sent_now = False
+                        try:
+                            self.uploader.enqueue(payload)
+                            sent_now = True
+                        except Exception:
+                            sent_now = False
+                        if self.upload_log_sent and sent_now:
+                            try:
+                                text = json.dumps(payload, ensure_ascii=False)
+                                with self.upload_log_sent.open('a', encoding='utf-8') as f:
+                                    f.write(f"{self.frame_timestamp(st.get('last_frame_idx', frame_idx))},{track_key},0,{text}\n")
+                            except Exception:
+                                pass
+                        if self.upload_log_full:
+                            try:
+                                text = json.dumps(payload, ensure_ascii=False)
+                                with self.upload_log_full.open('a', encoding='utf-8') as f:
+                                    f.write(f"{self.frame_timestamp(st.get('last_frame_idx', frame_idx))},{track_key},0,1,{text}\n")
+                            except Exception:
+                                pass
+                else:
+                    self.upload_qualified.add(track_key)
+            st['closed'] = True
 
     def flush_inactive(self, active_ids, frame_idx):
         active_ids = active_ids or set()
@@ -1413,6 +1548,16 @@ class EventManager:
                         'captureTime': timestamp,
                         'washDuration': round(duration_val, 2),
                     }
+                    reasons = st.get('abnormal_reasons')
+                    if reasons is None:
+                        reasons = set()
+                        st['abnormal_reasons'] = reasons
+                    if 2 not in st['events']:
+                        reasons.add('MISSING_TYPE2')
+                    if st.get('water_detected') and 3 not in st['events']:
+                        reasons.add('MISSING_TYPE3')
+                    if st.get('zone_b_dwell_frames', 0) > 0 and 4 not in st['events']:
+                        reasons.add('MISSING_TYPE4')
                     self.emit_event(tid, 5, st.get('last_frame_idx', frame_idx), st.get('last_frame'), extras, st)
                     st['events'].add(5)
                 if st.get('record_start_frame') is not None and st.get('record_stop_frame') is None:
@@ -1453,16 +1598,50 @@ class EventManager:
         dbg = track_state.get('debug', {})
         if dbg:
             anchor_dwell = int(dbg.get('zone_b_elapsed', 0) or 0)
+        capture_time = payload.get('captureTime') or self.frame_timestamp(frame_idx)
+        try:
+            track_state['last_event_capture_time'] = capture_time
+        except Exception:
+            pass
+        if event_type == 1:
+            prev_type1_time = track_state.get('type1_capture_time')
+            if not prev_type1_time:
+                track_state['type1_capture_time'] = capture_time
+                try:
+                    dt = datetime.strptime(capture_time, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    dt = datetime.now()
+                ts_str = dt.strftime("%Y%m%d%H%M")
+                device_name = self.config.get('system', {}).get('device_id') or self.camera_id
+                session_id = f"{device_name}-{ts_str}-{track_id}"
+                track_state['session_id'] = session_id
+        session_id = track_state.get('session_id')
+        if not session_id:
+            base_time = track_state.get('type1_capture_time') or capture_time
+            try:
+                dt = datetime.strptime(base_time, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                dt = datetime.now()
+            ts_str = dt.strftime("%Y%m%d%H%M")
+            device_name = self.config.get('system', {}).get('device_id') or self.camera_id
+            session_id = f"{device_name}-{ts_str}-{track_id}"
+            track_state['session_id'] = session_id
         if event_type == 1:
             prev_start = track_state.get('record_start_frame')
             if prev_start is None or frame_idx < prev_start:
                 track_state['record_start_frame'] = frame_idx
+        if track_state.get('record_start_frame') is None:
+            track_state['record_start_frame'] = frame_idx
         if event_type == 5:
             extra_frames = int(max(self.fps, 1.0) * 5.0)
             stop_frame = frame_idx + extra_frames
             prev_stop = track_state.get('record_stop_frame')
             if prev_stop is None or stop_frame > prev_stop:
                 track_state['record_stop_frame'] = stop_frame
+        try:
+            track_state[f'last_event_t{event_type}_capture_time'] = capture_time
+        except Exception:
+            pass
         capture_path = None
         if frame is not None:
             fname = f'{self.camera_id}_{track_id}_t{event_type}_{frame_idx}.jpg'
@@ -1472,10 +1651,10 @@ class EventManager:
             except Exception:
                 capture_path = None
         event = {
-            'id': f'{self.camera_id}_{track_id}',
+            'id': session_id,
             'trackId': track_id,
             'type': event_type,
-            'captureTime': payload.get('captureTime') or self.frame_timestamp(frame_idx),
+            'captureTime': capture_time,
             'plateNumber': payload.get('plateNumber') or '',
             'vehicleType': vehicle_type,
             'washDuration': payload.get('washDuration', 0.0),
@@ -1484,9 +1663,27 @@ class EventManager:
             'lane': self.lane_name,
             'anchorDwellFrames': anchor_dwell,
         }
+        reasons = track_state.get('abnormal_reasons') if track_state else None
+        if reasons:
+            if isinstance(reasons, set):
+                reasons_list = sorted(reasons)
+            else:
+                reasons_list = sorted(str(x) for x in reasons if x)
+            if reasons_list:
+                event['isAbnormal'] = True
+                event['abnormalReason'] = '|'.join(reasons_list)
         plate_text, is_guess = self._resolve_plate_with_shadow(track_id, track_state, frame_idx)
         if not event['plateNumber']:
             event['plateNumber'] = plate_text
+        if not event['plateNumber']:
+            event['isAbnormal'] = True
+            reason = 'PLATE_MISSING'
+            if 'abnormalReason' in event and event['abnormalReason']:
+                parts = set(str(x).strip() for x in str(event['abnormalReason']).split('|') if x)
+                parts.add(reason)
+                event['abnormalReason'] = '|'.join(sorted(parts))
+            else:
+                event['abnormalReason'] = reason
         event['plateIsGuess'] = bool(is_guess and event['plateNumber'])
         dir_code = 0
         dir_label = ''
@@ -1501,6 +1698,18 @@ class EventManager:
             event['washEndTime'] = track_state.get('wash_end_time') or event['captureTime']
             event['videoEndTime'] = self.frame_timestamp(track_state.get('last_frame_idx', frame_idx))
             event['totalWashDuration'] = round(track_state.get('wash_duration', 0.0), 2)
+            video_duration = 0.0
+            type1_time = track_state.get('type1_capture_time')
+            if type1_time:
+                try:
+                    dt1 = datetime.strptime(type1_time, "%Y-%m-%d %H:%M:%S")
+                    dt5 = datetime.strptime(event['captureTime'], "%Y-%m-%d %H:%M:%S")
+                    delta = (dt5 - dt1).total_seconds()
+                    if delta > 0:
+                        video_duration = round(delta, 2)
+                except Exception:
+                    video_duration = 0.0
+            event['videoDuration'] = video_duration
             event['cleanliness'] = self.default_cleanliness
         if track_state.get('wash_start_time') and not event.get('washStartTime'):
             event['washStartTime'] = track_state.get('wash_start_time')
@@ -1525,7 +1734,25 @@ class EventManager:
             if api_payload:
                 track_key = event['id']
                 sent_now = False
+                is_abnormal = bool(api_payload.get('isAbnormal'))
                 if event_type == 2:
+                    buffer = self.upload_buffer.pop(track_key, [])
+                    buffer.append(api_payload)
+                    self.upload_qualified.add(track_key)
+                    for p in buffer:
+                        try:
+                            self.uploader.enqueue(p)
+                        except Exception:
+                            continue
+                        sent_now = True
+                        if self.upload_log_sent:
+                            try:
+                                text = json.dumps(p, ensure_ascii=False)
+                                with self.upload_log_sent.open('a', encoding='utf-8') as f:
+                                    f.write(f"{event['captureTime']},{track_key},{event_type},{text}\n")
+                            except Exception:
+                                pass
+                elif is_abnormal and track_key not in self.upload_qualified:
                     buffer = self.upload_buffer.pop(track_key, [])
                     buffer.append(api_payload)
                     self.upload_qualified.add(track_key)
@@ -1760,6 +1987,7 @@ class EventManager:
         plate_color = event.get('plateColor', self.default_plate_color)
         plate_color_conf = event.get('plateColorConfidence', self.default_plate_color_conf)
         plate_is_guess = event.get('plateIsGuess', False)
+        reasons = track_state.get('abnormal_reasons') if track_state else None
         wash_start_time = track_state.get('wash_start_time') if track_state else None
         dir_code = 0
         dir_label = ''
@@ -1767,12 +1995,14 @@ class EventManager:
         video_end_time = None
         total_wash_duration = None
         cleanliness = None
+        video_duration = None
         if evt_type == 5:
             dir_code, dir_label = self._resolve_direction(track_state)
             wash_end_time = track_state.get('wash_end_time') or capture_time
             video_end_time = self.frame_timestamp(track_state.get('last_frame_idx', frame_idx))
             total_wash_duration = round(track_state.get('wash_duration', 0.0), 2)
             cleanliness = self.default_cleanliness
+            video_duration = event.get('videoDuration')
         payload = {}
         payload['id'] = event['id']
         payload['type'] = evt_type
@@ -1805,6 +2035,7 @@ class EventManager:
             payload['videoEndTime'] = video_end_time
             payload['totalWashDuration'] = total_wash_duration
             payload['cleanliness'] = cleanliness
+            payload['videoDuration'] = video_duration
             payload['plateNumber'] = plate_number
             payload['plateConfidence'] = plate_conf
             payload['plateColor'] = plate_color
@@ -1828,6 +2059,14 @@ class EventManager:
             payload['plateIsGuess'] = plate_is_guess
             if wash_start_time:
                 payload['washStartTime'] = wash_start_time
+        if reasons:
+            if isinstance(reasons, set):
+                reasons_list = sorted(reasons)
+            else:
+                reasons_list = sorted(str(x) for x in reasons if x)
+            if reasons_list:
+                payload['isAbnormal'] = True
+                payload['abnormalReason'] = '|'.join(reasons_list)
         return payload
 
     def _resolve_direction(self, track_state):
@@ -2121,27 +2360,7 @@ def process_video(path, args):
     output_dir = getattr(args, 'output_dir', None)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
-    save_path = args.save_video
-    if save_path and os.path.isdir(save_path):
-        save_path = os.path.join(save_path, Path(path).stem + '_rknn.mp4')
-    elif not save_path and output_dir:
-        save_path = os.path.join(output_dir, Path(path).stem + '_mt.mp4')
     video_writer = None
-    segment_minutes = int(video_cfg.get('segment_minutes', 60) or 0)
-    enable_global_video = bool(logic_cfg.get('enable_global_video', True))
-    if save_path and enable_global_video:
-        save_dir = os.path.dirname(save_path)
-        if save_dir:
-            os.makedirs(save_dir, exist_ok=True)
-        if segment_minutes > 0:
-            video_writer = SegmentedVideoWriter(save_path, fps, (width, height), segment_minutes=segment_minutes)
-        else:
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            writer_obj = cv2.VideoWriter(save_path, fourcc, fps, (width, height))
-            if writer_obj.isOpened():
-                video_writer = writer_obj
-            else:
-                print(f'warning: cannot open writer {save_path}, skip video saving')
     csv_writer = None
     csv_f = None
     plate_lock_frames = int(getattr(args, 'plate_lock_frames', 5))
@@ -2206,7 +2425,7 @@ def process_video(path, args):
             debug_frame_file.parent.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
-    debug_frame_interval = max(1, int(video_cfg.get('debug_frame_interval', 10)))
+    debug_frame_interval = max(1, int(video_cfg.get('debug_frame_interval', 30)))
 
     task_q = Queue(maxsize=args.queue_size)
     result_q = Queue()
@@ -2232,9 +2451,27 @@ def process_video(path, args):
     alias_confirm = {}
     alias_timeout = int(config.get('track_timeout_frames', 60))
     enable_per_id_video = bool(logic_cfg.get('enable_per_id_video', False))
-    per_id_video_dir = Path(config.get('per_id_video_dir', './video_result/per_id'))
+    per_id_video_dir = Path(logic_cfg.get('per_id_video_dir', './video_result/per_id'))
     per_id_video_dir.mkdir(parents=True, exist_ok=True)
+    per_id_session_dir = None
+    if enable_per_id_video:
+        now = datetime.now()
+        date_dir = now.strftime('%Y%m%d')
+        hour_dir = now.strftime('%H')
+        per_id_session_dir = per_id_video_dir / date_dir / hour_dir
+        per_id_session_dir.mkdir(parents=True, exist_ok=True)
     per_id_writers = {}
+    per_id_downscale_ratio = float(logic_cfg.get('per_id_downscale_ratio', 1.0) or 1.0)
+    if per_id_downscale_ratio <= 0.0:
+        per_id_downscale_ratio = 1.0
+    per_id_target_width = width
+    per_id_target_height = height
+    if per_id_downscale_ratio < 0.999:
+        per_id_target_width = max(1, int(width * per_id_downscale_ratio))
+        per_id_target_height = max(1, int(height * per_id_downscale_ratio))
+    per_id_frame_stride = int(logic_cfg.get('per_id_frame_stride', 1) or 1)
+    if per_id_frame_stride < 1:
+        per_id_frame_stride = 1
 
     def mark_alias_confirm(alias_id, has_plate_text, frame_idx, require_text):
         if alias_id <= 0:
@@ -2285,7 +2522,7 @@ def process_video(path, args):
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
 
     def drain_results(block=True):
-        nonlocal next_frame_to_write, finished_workers, car_plate_cache, per_id_writers
+        nonlocal next_frame_to_write, finished_workers, car_plate_cache, per_id_writers, enable_per_id_video
         try:
             item = result_q.get(block=block, timeout=1 if block else 0)
         except Exception:
@@ -2570,21 +2807,45 @@ def process_video(path, args):
                             continue
                         writer = per_id_writers.get(tid)
                         if writer is None:
-                            fname = f"{event_manager.camera_id}_{tid}.mp4"
-                            path = per_id_video_dir / fname
-                            fourcc_local = cv2.VideoWriter_fourcc(*'mp4v')
-                            writer_obj = cv2.VideoWriter(str(path), fourcc_local, fps, (width, height))
-                            if writer_obj.isOpened():
+                            st_capture_time = st.get('type1_capture_time')
+                            if not st_capture_time:
+                                for ev_type in (5, 4, 3, 2, 1):
+                                    ev_key = f'last_event_t{ev_type}_capture_time'
+                                    val = st.get(ev_key)
+                                    if val:
+                                        st_capture_time = val
+                                        break
+                            if not st_capture_time:
+                                st_capture_time = event_manager.frame_timestamp(start_f)
+                            try:
+                                dt = datetime.strptime(st_capture_time, "%Y-%m-%d %H:%M:%S")
+                            except Exception:
+                                dt = datetime.now()
+                            session_id = st.get('session_id')
+                            if not session_id:
+                                ts_str = dt.strftime("%Y%m%d%H%M")
+                                device_name = config.get('system', {}).get('device_id') or event_manager.camera_id
+                                session_id = f"{device_name}-{ts_str}-{tid}"
+                            fname = f"{session_id}.mp4"
+                            base_dir = per_id_session_dir or per_id_video_dir
+                            path = base_dir / fname
+                            writer_obj = FfmpegH264Writer(str(path), per_id_target_width, per_id_target_height, fps)
+                            if writer_obj.is_opened():
                                 per_id_writers[tid] = writer_obj
                                 writer = writer_obj
                             else:
+                                print(f"[per-id-video] H.264 writer init failed, per-id video disabled for this run: {path}")
+                                enable_per_id_video = False
                                 writer = None
+                                break
                         if writer is not None:
-                            writer.write(frame_out)
+                            frame_to_write = frame_out
+                            if per_id_downscale_ratio < 0.999:
+                                frame_to_write = cv2.resize(frame_out, (per_id_target_width, per_id_target_height))
+                            if next_frame_to_write % per_id_frame_stride == 0:
+                                writer.write(frame_to_write)
                     for tid in to_close:
                         per_id_writers.pop(tid, None)
-                if video_writer:
-                    video_writer.write(frame_out)
                 if csv_writer and rows:
                     csv_writer.writerows(rows)
                 next_frame_to_write += 1

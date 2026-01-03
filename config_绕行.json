@@ -1,6 +1,6 @@
 {
   "system": {
-    "device_id": "RK3588-DEV",
+    "device_id": "RK3588-DEV-绕行",
     "api": {
       "url": "",
       "token": "",
@@ -9,7 +9,7 @@
     "monitor_interval": 30
   },
   "video": {
-    "source": "/home/hinlink/下载/video/test03.mp4",
+    "source": "/home/hinlink/下载/video/test04.mp4",
     "source_mode": "file",
     "hw_decode": true,
     "workers": 2,
@@ -116,7 +116,7 @@
     "min_zone_b_dwell_frames_for_type4": 60,
     "enable_global_video": false,
     "enable_per_id_video": true,
-    "per_id_video_dir": "./video_result/per_id",
+    "per_id_video_dir": "/home/hinlink/视频",
     "per_id_downscale_ratio": 1,
     "per_id_frame_stride": 1
   },
@@ -125,6 +125,6 @@
     "disk_target": 50,
     "clean_interval_seconds": 600
   },
-  "event_output_dir": "events/config",
-  "event_capture_dir": "captures/config"
+  "event_output_dir": "events/config_绕行",
+  "event_capture_dir": "captures/config_绕行"
 }

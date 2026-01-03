@@ -5,6 +5,7 @@ import os
 import subprocess
 import threading
 import time
+import sys
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -13,7 +14,7 @@ from typing import Dict, List, Optional
 import cv2
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, Response, PlainTextResponse
+from fastapi.responses import HTMLResponse, Response, PlainTextResponse, FileResponse
 from pydantic import BaseModel, Field
 
 from config_manager import ConfigManager, ConfigError
@@ -66,14 +67,19 @@ app.add_middleware(
 
 @app.on_event("startup")
 def _startup_manager():
-    _get_inference_manager()
+    try:
+        _get_default_inference_manager()
+    except Exception as exc:
+        print(f"[server] startup: failed to init default inference manager: {exc}")
 
 
 @app.on_event("shutdown")
 def _shutdown_manager():
-    mgr = INFERENCE_MANAGER
-    if mgr:
-        mgr.shutdown_manager()
+    for mgr in list(INFERENCE_MANAGERS.values()):
+        try:
+            mgr.shutdown_manager()
+        except Exception as exc:
+            print(f"[server] shutdown: failed to shutdown manager: {exc}")
 
 
 class FrameCache:
@@ -153,7 +159,7 @@ class InferenceManager:
         self.single_shot = self._detect_single_shot()
         if self.single_shot:
             self._append_log('[guardian] file source detected，本次推理完成后不会自动重启')
-        cmd = ["python3", str(self.script_path), "--config", str(self.config_path)]
+        cmd = [sys.executable, str(self.script_path), "--config", str(self.config_path)]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         self.process = proc
         self.restart_count += 1
@@ -303,17 +309,37 @@ class InferenceManager:
             self.config_path = Path(path)
 
 
-INFERENCE_MANAGER: Optional[InferenceManager] = None
+INFERENCE_MANAGERS: Dict[str, InferenceManager] = {}
 
 
-def _get_inference_manager() -> InferenceManager:
-    global INFERENCE_MANAGER
-    if INFERENCE_MANAGER is None:
-        INFERENCE_MANAGER = InferenceManager(RUN_SCRIPT, CONFIG_PATH)
+def _resolve_config_path_for_key(key: str) -> Path:
+    key = str(key or "").strip()
+    base = CONFIG_PATH.parent
+    if not key:
+        candidate = CONFIG_PATH
     else:
-        INFERENCE_MANAGER.script_path = RUN_SCRIPT
-        INFERENCE_MANAGER.config_path = CONFIG_PATH
-    return INFERENCE_MANAGER
+        candidate = (base / key).resolve()
+    if not candidate.exists():
+        raise HTTPException(status_code=404, detail="配置文件不存在")
+    if candidate.suffix.lower() != ".json":
+        raise HTTPException(status_code=400, detail="仅支持 JSON 配置")
+    return candidate
+
+
+def _get_inference_manager_for_key(key: str) -> InferenceManager:
+    cfg_path = _resolve_config_path_for_key(key)
+    mgr = INFERENCE_MANAGERS.get(key)
+    if mgr is None:
+        mgr = InferenceManager(RUN_SCRIPT, cfg_path)
+        INFERENCE_MANAGERS[key] = mgr
+    else:
+        mgr.script_path = RUN_SCRIPT
+        mgr.config_path = cfg_path
+    return mgr
+
+
+def _get_default_inference_manager() -> InferenceManager:
+    return _get_inference_manager_for_key(CONFIG_PATH.name)
 
 
 def _resolve_path(path_str: Optional[str], default: Optional[Path] = None) -> Path:
@@ -348,6 +374,21 @@ def _debug_frame_path(cfg: ConfigManager) -> Optional[Path]:
     if not dbg_path:
         return None
     return _resolve_path(dbg_path)
+
+
+def _per_id_video_root(cfg: ConfigManager) -> Path:
+    logic = cfg.data.get("logic", {}) or {}
+    base_dir = logic.get("per_id_video_dir") or cfg.data.get("per_id_video_dir")
+    base = _resolve_path(base_dir or (ROOT / "video_result" / "per_id"))
+    return base
+
+
+def _events_root(cfg: ConfigManager) -> Path:
+    base_dir = cfg.data.get("event_output_dir")
+    if not base_dir:
+        base_dir = cfg.data.get("system", {}).get("event_output_dir")
+    base = _resolve_path(base_dir or (ROOT / "events"))
+    return base
 
 
 def _read_csv_tail(path: Path, limit: int):
@@ -473,6 +514,91 @@ def debug_frame():
     return Response(content=data, media_type="image/jpeg")
 
 
+@app.get("/videos/per_id")
+def list_per_id_videos(limit: int = 200):
+    cfg = _load_config()
+    root = _per_id_video_root(cfg)
+    events_root = _events_root(cfg)
+    if not root.exists():
+        return {"videos": []}
+    try:
+        files = sorted(root.rglob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+    except Exception:
+        return {"videos": []}
+    items = []
+    limit = max(1, min(int(limit), 500))
+    for path in files[:limit]:
+        try:
+            stat = path.stat()
+        except Exception:
+            continue
+        rel = str(path.relative_to(root))
+        name = path.name
+        stem = path.stem
+        camera_id = None
+        track_id = None
+        meta = {}
+        parts = stem.rsplit("_", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            camera_id = parts[0]
+            track_id = int(parts[1])
+            key_prefix = f"{camera_id}_{track_id}"
+        else:
+            dash_parts = stem.rsplit("-", 2)
+            if len(dash_parts) == 3 and dash_parts[2].isdigit():
+                camera_id = dash_parts[0]
+                track_id = int(dash_parts[2])
+                key_prefix = f"{camera_id}_{track_id}"
+            else:
+                key_prefix = None
+        if key_prefix:
+            try:
+                cand = sorted(events_root.glob(f"{key_prefix}_t5_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+            except Exception:
+                cand = []
+            if cand:
+                try:
+                    with cand[0].open("r", encoding="utf-8") as f:
+                        event = json.load(f)
+                except Exception:
+                    event = {}
+                meta = {
+                    "plateNumber": event.get("plateNumber") or "",
+                    "captureTime": event.get("captureTime") or "",
+                    "isAbnormal": bool(event.get("isAbnormal")),
+                    "abnormalReason": event.get("abnormalReason") or "",
+                    "vehicleType": event.get("vehicleType") or "",
+                    "lane": event.get("lane") or "",
+                }
+        items.append({
+            "file": name,
+            "relativePath": rel,
+            "cameraId": camera_id,
+            "trackId": track_id,
+            "meta": meta,
+            "size": stat.st_size,
+            "modified": stat.st_mtime,
+            "session": str(path.parent.relative_to(root)) if path.parent != root else "",
+        })
+    return {"videos": items}
+
+
+@app.get("/videos/per_id/file")
+def get_per_id_video(path: str):
+    cfg = _load_config()
+    root = _per_id_video_root(cfg)
+    target = (root / path).resolve()
+    try:
+        root_resolved = root.resolve()
+    except Exception:
+        root_resolved = root
+    if not str(target).startswith(str(root_resolved)):
+        raise HTTPException(status_code=403, detail="无效路径")
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return FileResponse(str(target), media_type="video/mp4", filename=target.name)
+
+
 @app.get("/config")
 def read_config():
     cfg = _load_config()
@@ -546,7 +672,7 @@ def select_config(payload: ConfigSelectPayload):
     if candidate.suffix.lower() != ".json":
         raise HTTPException(status_code=400, detail="仅支持 JSON 配置")
     CONFIG_PATH = candidate
-    mgr = _get_inference_manager()
+    mgr = _get_default_inference_manager()
     mgr.set_config_path(candidate)
     FRAME_CACHE.clear()
     return {"active": candidate.name}
@@ -566,39 +692,39 @@ def update_config(payload: ConfigPayload):
 
 
 @app.post("/inference/start")
-def start_inference():
-    mgr = _get_inference_manager()
+def start_inference(key: Optional[str] = None):
+    mgr = _get_inference_manager_for_key(key or CONFIG_PATH.name)
     return mgr.start()
 
 
 @app.post("/inference/stop")
-def stop_inference():
-    mgr = _get_inference_manager()
+def stop_inference(key: Optional[str] = None):
+    mgr = _get_inference_manager_for_key(key or CONFIG_PATH.name)
     return mgr.stop()
 
 
 @app.post("/inference/restart")
-def restart_inference():
-    mgr = _get_inference_manager()
+def restart_inference(key: Optional[str] = None):
+    mgr = _get_inference_manager_for_key(key or CONFIG_PATH.name)
     return mgr.restart()
 
 
 @app.post("/inference/auto_restart")
-def set_auto_restart(enable: bool = True):
-    mgr = _get_inference_manager()
+def set_auto_restart(enable: bool = True, key: Optional[str] = None):
+    mgr = _get_inference_manager_for_key(key or CONFIG_PATH.name)
     mgr.set_auto_restart(enable)
     return {"auto_restart": enable}
 
 
 @app.get("/inference/status")
-def inference_status():
-    mgr = _get_inference_manager()
+def inference_status(key: Optional[str] = None):
+    mgr = _get_inference_manager_for_key(key or CONFIG_PATH.name)
     return mgr.status()
 
 
 @app.get("/logs/inference")
-def inference_logs(lines: int = 200):
-    mgr = _get_inference_manager()
+def inference_logs(lines: int = 200, key: Optional[str] = None):
+    mgr = _get_inference_manager_for_key(key or CONFIG_PATH.name)
     return {"lines": mgr.logs(lines)}
 
 

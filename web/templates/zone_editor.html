@@ -74,6 +74,9 @@
           <label>API Token
             <input v-model="form.system.api.token" placeholder="token" />
           </label>
+          <label>车道名称
+            <input v-model="form.logic.lane_name" placeholder="冲洗 / 绕行" />
+          </label>
           <label>视频源（RTSP/本地文件）
             <input v-model="form.video.source" placeholder="rtsp://... 或 /path/video.mp4" />
           </label>
@@ -81,25 +84,18 @@
             <input type="checkbox" v-model="form.video.hw_decode" />
             启用硬件解码 (GStreamer+mpp)
           </label>
-          <label>保存录像路径 (可选)
-            <input v-model="form.video.save_video" placeholder="./video_result/cam.mp4" />
-          </label>
-          <label>
-            <input type="checkbox" v-model="form.logic.enable_global_video" />
-            启用全局录像保存
-          </label>
           <label>
             <input type="checkbox" v-model="form.logic.enable_per_id_video" />
             启用按车辆ID录像保存
           </label>
-          <label>CSV 输出路径 (可选)
-            <input v-model="form.video.csv" placeholder="./video_result/cam.csv" />
+          <label>按车辆ID录像目录
+            <input v-model="form.logic.per_id_video_dir" placeholder="./video_result/per_id" />
           </label>
-          <label>调试帧保存路径 (实时画面)
-            <input v-model="form.video.debug_frame_path" placeholder="./debug/latest.jpg" />
+          <label>按车辆ID录像降分辨率比例 (0.1-1.0)
+            <input type="number" min="0.1" max="1" step="0.05" v-model.number="form.logic.per_id_downscale_ratio" />
           </label>
-          <label>调试帧刷新间隔 (帧)
-            <input type="number" min="1" v-model.number="form.video.debug_frame_interval" />
+          <label>按车辆ID录像帧间隔 (每 N 帧写一帧)
+            <input type="number" min="1" v-model.number="form.logic.per_id_frame_stride" />
           </label>
           <div>
             <button @click="saveConfig" :disabled="busy">保存配置</button>
@@ -111,6 +107,7 @@
         <section class="panel">
           <h3>推理守护进程</h3>
           <p class="hint">通过 Guardian 控制 run_zone_detect.py，无需接显示器即可远程维护推理进程。</p>
+          <p class="hint">当前面板绑定场景：<strong>{{ activeInferenceKey }}</strong>（随上方场景配置切换）</p>
           <p>状态：<strong>{{ inferenceStatusText }}</strong>
             <span v-if="inferenceStatus.pid">(PID {{ inferenceStatus.pid }})</span>
           </p>
@@ -173,6 +170,12 @@
           <label>车辆中心门控比例 (0-1, 0关闭)
             <input type="number" min="0" max="1" step="0.01" v-model.number="form.logic.vehicle_center_gate_ratio" />
           </label>
+          <label>按车辆ID录像降分辨率比例 (0.1-1.0)
+            <input type="number" min="0.1" max="1" step="0.05" v-model.number="form.logic.per_id_downscale_ratio" />
+          </label>
+          <label>按车辆ID录像帧间隔 (每 N 帧写一帧)
+            <input type="number" min="1" v-model.number="form.logic.per_id_frame_stride" />
+          </label>
           <label>Type1 最小 Zone A 停留帧数 (0关闭)
             <input type="number" min="0" v-model.number="form.logic.min_track_frames_for_type1" />
           </label>
@@ -191,6 +194,10 @@
           </label>
           <label>影子车牌池大小
             <input type="number" min="10" v-model.number="form.logic.shadow_plate_pool.max_candidates" />
+          </label>
+          <label>
+            <input type="checkbox" v-model="form.logic.no_draw" />
+            禁用所有绘制（仅原始画面，用于性能优化）
           </label>
           <label>
             <input type="checkbox" v-model="form.logic.debug_overlay" />
@@ -234,6 +241,56 @@
             <button class="secondary" @click="refreshDebugImage" :disabled="busy">刷新实时画面</button>
           </div>
         </section>
+        <section class="panel">
+          <h3>按车辆ID录像浏览</h3>
+          <p class="hint">按日期/小时划分目录，选择条目播放并查看车辆信息。</p>
+          <div>
+            <button class="secondary" @click="loadPerIdVideos" :disabled="perIdLoading || busy">刷新列表</button>
+          </div>
+          <div v-if="perIdVideos.length">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间分组</th>
+                  <th>文件名</th>
+                  <th>Track ID</th>
+                  <th>车牌</th>
+                  <th>异常原因</th>
+                  <th>抓拍时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="v in perIdVideos" :key="v.relativePath"
+                    @click="selectVideo(v)"
+                    :style="{ cursor: 'pointer', fontWeight: selectedVideo && selectedVideo.relativePath === v.relativePath ? 'bold' : 'normal' }">
+                  <td>{{ v.session || '当前目录' }}</td>
+                  <td>{{ v.file }}</td>
+                  <td>{{ v.trackId ?? '未知' }}</td>
+                  <td>{{ v.meta && v.meta.plateNumber ? v.meta.plateNumber : '未知' }}</td>
+                  <td>
+                    <span v-if="v.meta && v.meta.isAbnormal">
+                      {{ formatAbnormalReason(v.meta.abnormalReason) || '异常' }}
+                    </span>
+                    <span v-else>正常</span>
+                  </td>
+                  <td>{{ v.meta && v.meta.captureTime ? v.meta.captureTime : '未知' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="hint" v-else>暂无按车ID录像文件。</p>
+          <div v-if="selectedVideo" style="margin-top: 12px;">
+            <p>当前选中：{{ selectedVideo.file }}（Track {{ selectedVideo.trackId ?? '未知' }}）</p>
+            <p>车牌：{{ selectedVideo.meta && selectedVideo.meta.plateNumber ? selectedVideo.meta.plateNumber : '未知' }}，
+              异常：{{ selectedVideo.meta && selectedVideo.meta.isAbnormal ? (formatAbnormalReason(selectedVideo.meta.abnormalReason) || '是') : '否' }}</p>
+            <p>抓拍时间：{{ selectedVideo.meta && selectedVideo.meta.captureTime ? selectedVideo.meta.captureTime : '未知' }}</p>
+            <div v-if="perIdVideoUrl" style="margin-top: 8px;">
+              <a :href="perIdVideoUrl" :download="selectedVideo.file">
+                <button class="secondary">下载当前录像</button>
+              </a>
+            </div>
+          </div>
+        </section>
       </div>
       <section class="canvas-wrapper">
         <div class="mode-buttons">
@@ -263,7 +320,7 @@
         return {
           form: {
             system: { device_id: '', monitor_interval: 2.0, api: { url: '', token: '', capture_mode: 'path' } },
-            video: { source: '', source_mode: 'auto', hw_decode: false, workers: 2, core_mask: '0-2', save_video: '', csv: '', debug_frame_path: '', debug_frame_interval: 10 },
+            video: { source: '', source_mode: 'auto', hw_decode: false, workers: 2, core_mask: '0-2', save_video: '', csv: '', debug_frame_path: '', debug_frame_interval: 30 },
             logic: {
               detection_anchor: 'bottom_center',
               zone_a_mask_enable: true,
@@ -274,8 +331,10 @@
               track_timeout_frames: 90,
               vehicle_iou_threshold: 0.3,
               vehicle_center_gate_ratio: 0.0,
+              no_draw: false,
               enable_global_video: true,
               enable_per_id_video: false,
+              lane_name: '冲洗',
               min_track_frames_for_type1: 5,
               min_zone_a_dwell_frames_for_type5: 25,
               disable_plate_only_events: true,
@@ -285,7 +344,10 @@
               debug_overlay: false,
               debug_track_state: false,
               debug_anchor_points: false,
-              debug_water_boxes: false
+              debug_water_boxes: false,
+              per_id_video_dir: './video_result/per_id',
+              per_id_downscale_ratio: 1.0,
+              per_id_frame_stride: 1
             },
             zones: {
               zone_a_detection: [],
@@ -307,12 +369,17 @@
           inferenceStatus: { running: false, pid: null, last_start: null, last_exit: null, restart_count: 0 },
           inferenceAutoRestart: true,
           inferenceLogs: [],
+          inferenceInstances: [],
           inferenceStatusTimer: null,
           inferenceLogTimer: null,
           configFiles: [],
           selectedConfig: '',
           activeConfig: '',
-          logicView: false
+          logicView: false,
+          debugFrameTimer: null,
+          perIdVideos: [],
+          perIdLoading: false,
+          selectedVideo: null
         };
       },
       computed: {
@@ -324,6 +391,9 @@
         inferenceStatusText() {
           return this.inferenceStatus.running ? '运行中' : '已停止';
         },
+        activeInferenceKey() {
+          return this.activeConfig || this.selectedConfig || 'config.json';
+        },
         canvasStyle() {
           const bg = this.backgroundUrl ? `url(${this.backgroundUrl})` : 'none';
           return {
@@ -331,6 +401,19 @@
             backgroundSize: 'contain',
             backgroundRepeat: 'no-repeat',
             backgroundPosition: 'center'
+          };
+        },
+        perIdVideoUrl() {
+          if (!this.selectedVideo) return '';
+          const encoded = encodeURIComponent(this.selectedVideo.relativePath);
+          return `/videos/per_id/file?path=${encoded}`;
+        },
+        abnormalReasonTable() {
+          return {
+            OVER_10_MINUTES: '停留超过10分钟',
+            MISSING_TYPE2: '缺少Type2事件',
+            MISSING_TYPE3: '缺少Type3事件',
+            MISSING_TYPE4: '缺少Type4事件'
           };
         }
       },
@@ -348,14 +431,17 @@
         this.loadFrame();
         this.loadConfig();
         this.refreshDebugImage();
+        this.loadPerIdVideos();
         this.fetchInferenceStatus();
         this.refreshInferenceLogs();
         this.inferenceStatusTimer = setInterval(() => this.fetchInferenceStatus(), 5000);
         this.inferenceLogTimer = setInterval(() => this.refreshInferenceLogs(true), 8000);
+        this.debugFrameTimer = setInterval(() => this.refreshDebugImage(), 5000);
       },
       beforeUnmount() {
         if (this.inferenceStatusTimer) clearInterval(this.inferenceStatusTimer);
         if (this.inferenceLogTimer) clearInterval(this.inferenceLogTimer);
+        if (this.debugFrameTimer) clearInterval(this.debugFrameTimer);
       },
       methods: {
         bindKeyboard() {
@@ -428,6 +514,7 @@
             this.repaint();
             this.status = '配置已加载';
             this.refreshDebugImage();
+            this.loadPerIdVideos();
           } catch (err) {
             this.status = err.message;
           }
@@ -440,7 +527,7 @@
           this.form.zones = z;
           this.form.logic.shadow_plate_pool = this.form.logic.shadow_plate_pool || { max_candidates: 50, max_age_frames: 120 };
           this.form.video.debug_frame_path = this.form.video.debug_frame_path || '';
-          this.form.video.debug_frame_interval = this.form.video.debug_frame_interval || 10;
+          this.form.video.debug_frame_interval = this.form.video.debug_frame_interval || 30;
           this.form.logic.debug_overlay = !!this.form.logic.debug_overlay;
           this.form.logic.debug_track_state = !!(this.form.logic.debug_track_state || this.form.logic.debug_overlay);
           this.form.logic.debug_anchor_points = !!(this.form.logic.debug_anchor_points || this.form.logic.debug_overlay);
@@ -502,6 +589,7 @@
             await this.loadConfig();
             await this.loadFrame();
             this.refreshDebugImage();
+            this.loadPerIdVideos();
             this.status = '配置已切换';
           } catch (err) {
             this.status = err.message;
@@ -545,7 +633,10 @@
           this.busy = true;
           this.status = `${actionLabel}…`;
           try {
-            const res = await fetch(endpoint, { method: 'POST' });
+            const key = encodeURIComponent(this.activeInferenceKey);
+            const sep = endpoint.includes('?') ? '&' : '?';
+            const url = `${endpoint}${sep}key=${key}`;
+            const res = await fetch(url, { method: 'POST' });
             if (!res.ok) throw new Error(`${actionLabel}失败`);
             const data = await res.json();
             this.inferenceStatus = data;
@@ -569,7 +660,8 @@
         },
         async fetchInferenceStatus() {
           try {
-            const res = await fetch('/inference/status');
+            const key = encodeURIComponent(this.activeInferenceKey);
+            const res = await fetch(`/inference/status?key=${key}`);
             if (!res.ok) throw new Error('获取推理状态失败');
             const data = await res.json();
             this.inferenceStatus = data;
@@ -585,7 +677,8 @@
           }
           try {
             const enabled = this.inferenceAutoRestart ? 'true' : 'false';
-            const res = await fetch(`/inference/auto_restart?enable=${enabled}`, { method: 'POST' });
+            const key = encodeURIComponent(this.activeInferenceKey);
+            const res = await fetch(`/inference/auto_restart?enable=${enabled}&key=${key}`, { method: 'POST' });
             if (!res.ok) throw new Error('设置自动重启失败');
             this.status = `自动重启 ${this.inferenceAutoRestart ? '已开启' : '已关闭'}`;
           } catch (err) {
@@ -598,7 +691,8 @@
             this.status = '加载推理日志…';
           }
           try {
-            const res = await fetch('/logs/inference?lines=200');
+            const key = encodeURIComponent(this.activeInferenceKey);
+            const res = await fetch(`/logs/inference?lines=200&key=${key}`);
             if (!res.ok) throw new Error('读取推理日志失败');
             const data = await res.json();
             this.inferenceLogs = data.lines || [];
@@ -813,6 +907,40 @@
             this.debugImageUrl = '';
             this.debugFrameStatus = err.message;
           }
+        },
+        async loadPerIdVideos() {
+          this.perIdLoading = true;
+          try {
+            const res = await fetch(`/videos/per_id?ts=${Date.now()}`);
+            if (!res.ok) throw new Error('读取按车ID录像列表失败');
+            const data = await res.json();
+            this.perIdVideos = data.videos || [];
+            if (!this.selectedVideo && this.perIdVideos.length > 0) {
+              this.selectedVideo = this.perIdVideos[0];
+            } else if (this.selectedVideo) {
+              const found = this.perIdVideos.find(v => v.relativePath === this.selectedVideo.relativePath);
+              if (!found) {
+                this.selectedVideo = this.perIdVideos[0] || null;
+              } else {
+                this.selectedVideo = found;
+              }
+            }
+          } catch (err) {
+            this.perIdVideos = [];
+          } finally {
+            this.perIdLoading = false;
+          }
+        },
+        selectVideo(item) {
+          this.selectedVideo = item;
+        },
+        formatAbnormalReason(reason) {
+          if (!reason) return '';
+          const map = this.abnormalReasonTable;
+          const parts = String(reason).split('|').map(s => s.trim()).filter(Boolean);
+          if (!parts.length) return '';
+          const mapped = parts.map(code => map[code] || code);
+          return mapped.join('、');
         },
         toggleLogicView() {
           this.logicView = !this.logicView;
