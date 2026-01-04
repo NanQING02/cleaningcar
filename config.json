@@ -2,7 +2,7 @@
   "system": {
     "device_id": "RK3588-DEV",
     "api": {
-      "url": "",
+      "url": "http://10.201.28.40:9000",
       "token": "",
       "capture_mode": "base64"
     },
@@ -77,7 +77,7 @@
     "stationary_speed_thresh": 8,
     "type34_min_interval_frames": 60,
     "track_timeout_frames": 180,
-    "track_max_age": 80,
+    "track_max_age": 125,
     "lane_name": "冲洗",
     "vehicle_shrink_ratio": 0.35,
     "vehicle_lock_min_votes": 40,
@@ -102,7 +102,7 @@
     "debug_track_state": true,
     "debug_anchor_points": true,
     "debug_water_boxes": true,
-    "no_draw": true,
+    "no_draw": false,
     "anchor_offset_ratio": 0.1,
     "zone_b_anchor_min_frames": 10,
     "wash_duration_offset_seconds": 0,

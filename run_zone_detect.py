@@ -245,6 +245,12 @@ def apply_class_thresholds_from_config(config):
 class FfmpegH264Writer:
     def __init__(self, path, width, height, fps):
         self.path = str(path)
+        p = Path(self.path)
+        if p.suffix:
+            temp_name = p.stem + '_temp' + p.suffix
+        else:
+            temp_name = p.name + '_temp'
+        self._output_path = str(p.with_name(temp_name))
         self.width = int(width)
         self.height = int(height)
         self.fps = float(fps)
@@ -287,7 +293,7 @@ class FfmpegH264Writer:
         tail = [
             '-movflags',
             '+faststart',
-            self.path,
+            self._output_path,
         ]
         return base + opts + tail
 
@@ -338,9 +344,11 @@ class FfmpegH264Writer:
             except Exception:
                 pass
             self.stdin = None
+        exit_code = None
         if self.proc:
             try:
-                self.proc.wait(timeout=5.0)
+                self.proc.wait(timeout=60.0)
+                exit_code = self.proc.returncode
             except Exception:
                 try:
                     self.proc.kill()
@@ -348,6 +356,16 @@ class FfmpegH264Writer:
                     pass
             self.proc = None
         self._opened = False
+        if getattr(self, '_output_path', None) and self.path:
+            try:
+                if os.path.exists(self._output_path):
+                    if exit_code is None or exit_code != 0:
+                        print(f'[per-id-video] ffmpeg exit code {exit_code} for {self._output_path}, not renaming')
+                    else:
+                        os.replace(self._output_path, self.path)
+                        print(f'[per-id-video] finalized video: {self.path}')
+            except Exception as exc:
+                print(f'[per-id-video] rename failed {self._output_path} -> {self.path}: {exc}')
 def parse_args():
     ap = argparse.ArgumentParser(description='Multithread RKNN detector demo.')
     ap.add_argument('--model', default='best.rknn')
@@ -910,11 +928,18 @@ class PlateTextTracker:
                     tid = track_id
                     break
             if tid is None:
-                results.append({'track_id': -1, 'text': normalize_plate_text(det.get('text', ''))})
+                results.append({'track_id': -1, 'text': normalize_plate_text(det.get('text', '')), 'is_guess': False})
                 continue
             track = self.tracks.get(tid)
             text = track.get('locked') or ''
-            results.append({'track_id': tid, 'text': text})
+            is_guess = False
+            if not text:
+                history = track.get('history') or []
+                if history:
+                    counts = Counter(history)
+                    text, _ = counts.most_common(1)[0]
+                    is_guess = True
+            results.append({'track_id': tid, 'text': text, 'is_guess': is_guess})
         return results
 
 
@@ -927,6 +952,13 @@ class VehicleTracker:
         self.next_id = 1
 
     def update(self, frame_idx, detections):
+        to_prune = []
+        for tid, tr in self.tracks.items():
+            last_seen = tr.get('last_seen', frame_idx)
+            if frame_idx - last_seen > self.max_age:
+                to_prune.append(tid)
+        for tid in to_prune:
+            self.tracks.pop(tid, None)
         track_ids = list(self.tracks.keys())
         det_boxes = [np.array(det['box'], dtype=float) for det in detections]
         assigned_tracks = {}
@@ -1104,7 +1136,7 @@ class EventManager:
         self.base_time = datetime.now()
         self.stationary_min_frames = int(config.get('stationary_min_frames', 0))
         self.stationary_speed_thresh = float(config.get('stationary_speed_thresh', 8.0))
-        self.min_water_hit_frames_for_wash = int(self.logic.get('min_water_hit_frames_for_wash', 60))
+        self.min_water_hit_frames_for_wash = int(self.logic.get('min_water_hit_frames_for_wash', 30))
         self.type34_min_interval = int(config.get('type34_min_interval_frames', 5))
         self.vehicle_shrink_ratio = float(config.get('vehicle_shrink_ratio', 0.35))
         self.vehicle_lock_min_votes = int(config.get('vehicle_lock_min_votes', 80))
@@ -1174,7 +1206,7 @@ class EventManager:
 
     def update_track(self, track_id, plate_box, vehicle_box, plate_text, frame_idx, frame,
                      water_boxes, water_active, is_plate, vehicle_label, vehicle_conf,
-                     plate_conf, confirmed, cleaning_label='', anchor_point=None):
+                     plate_conf, confirmed, cleaning_label='', anchor_point=None, plate_is_guess=False):
         if track_id <= 0:
             return
         st = self.tracks.setdefault(track_id, {
@@ -1190,6 +1222,7 @@ class EventManager:
             'last_frame_idx': frame_idx,
             'last_frame': None,
             'plate_text': '',
+            'plate_is_guess': False,
             'vehicle_cls': '',
             'last_plate_box': None,
             'last_vehicle_box': None,
@@ -1256,6 +1289,7 @@ class EventManager:
         normalized_plate = normalize_plate_text(plate_text)
         if normalized_plate:
             st['plate_text'] = normalized_plate
+            st['plate_is_guess'] = bool(plate_is_guess)
             self._add_shadow_candidate(track_id, normalized_plate, plate_conf, frame_idx)
         elif plate_conf and plate_conf > 0.0:
             self._add_shadow_candidate(track_id, plate_text, plate_conf, frame_idx)
@@ -1308,7 +1342,7 @@ class EventManager:
 
         timestamp = self.frame_timestamp(frame_idx)
         water_hit = self.water_contact(ref_box, water_boxes)
-        water_signal = bool(water_hit or water_active)
+        water_signal = bool(water_hit or water_active or bool(water_boxes))
         inside_a = bool(zone_state and zone_state.inside_a)
         inside_b = bool(zone_state and zone_state.inside_b)
         if zone_flags.get('enter_a'):
@@ -1352,7 +1386,7 @@ class EventManager:
             st['washing_candidate'] = False
         else:
             st['washing_candidate'] = True
-        if inside_b and water_hit:
+        if inside_b and water_boxes:
             st['water_hit_frames'] = st.get('water_hit_frames', 0) + 1
         water_ready = st.get('water_hit_frames', 0) >= self.min_water_hit_frames_for_wash
         stationary_ready = (self.stationary_min_frames > 0 and
@@ -1514,7 +1548,7 @@ class EventManager:
                     self.upload_qualified.add(track_key)
             st['closed'] = True
 
-    def flush_inactive(self, active_ids, frame_idx):
+    def flush_inactive(self, active_ids, frame_idx, on_track_timeout=None):
         active_ids = active_ids or set()
         to_remove = []
         for tid, st in self.tracks.items():
@@ -1563,6 +1597,11 @@ class EventManager:
                     st['record_stop_frame'] = last_idx + extra_frames
                 if self.single_lifecycle_events and 5 in st['events']:
                     st['closed'] = True
+                if on_track_timeout is not None:
+                    try:
+                        on_track_timeout(tid, st)
+                    except Exception:
+                        pass
                 to_remove.append(tid)
         for tid in to_remove:
             self.shadow_pool.pop(tid, None)
@@ -1644,7 +1683,14 @@ class EventManager:
             fname = f'{self.camera_id}_{track_id}_t{event_type}_{frame_idx}.jpg'
             capture_path = str(self.capture_dir / fname)
             try:
-                cv2.imwrite(capture_path, frame)
+                h, w = frame.shape[:2]
+                target_w, target_h = 1920, 1080
+                if w != target_w or h != target_h:
+                    frame_to_save = cv2.resize(frame, (target_w, target_h))
+                else:
+                    frame_to_save = frame
+                params = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
+                cv2.imwrite(capture_path, frame_to_save, params)
             except Exception:
                 capture_path = None
         event = {
@@ -1825,7 +1871,7 @@ class EventManager:
     def _resolve_plate_with_shadow(self, track_id, track_state, frame_idx):
         text = track_state.get('plate_text', '')
         if text:
-            return text, False
+            return text, bool(track_state.get('plate_is_guess', False))
         pool = self.shadow_pool.get(track_id)
         if not pool:
             return '', False
@@ -1852,6 +1898,9 @@ class EventManager:
 
     def _compute_effective_wash_duration(self, track_state, frame_idx):
         if not track_state.get('water_detected'):
+            return 0.0
+        hits = track_state.get('water_hit_frames', 0)
+        if hits < self.min_water_hit_frames_for_wash:
             return 0.0
         end_frame = frame_idx
         start_frame = track_state.get('last_type3_frame', -1)
@@ -2466,9 +2515,19 @@ def process_video(path, args):
     if per_id_downscale_ratio < 0.999:
         per_id_target_width = max(1, int(width * per_id_downscale_ratio))
         per_id_target_height = max(1, int(height * per_id_downscale_ratio))
+    target_w = int(logic_cfg.get('per_id_target_width', 1920) or 1920)
+    target_h = int(logic_cfg.get('per_id_target_height', 1080) or 1080)
+    per_id_target_width = target_w
+    per_id_target_height = target_h
+    per_id_output_fps = float(logic_cfg.get('per_id_fps', 20.0) or 20.0)
     per_id_frame_stride = int(logic_cfg.get('per_id_frame_stride', 1) or 1)
     if per_id_frame_stride < 1:
         per_id_frame_stride = 1
+
+    def finalize_per_id_for_track(track_id, track_state):
+        writer = per_id_writers.pop(track_id, None)
+        if writer is not None:
+            writer.release()
 
     def mark_alias_confirm(alias_id, has_plate_text, frame_idx, require_text):
         if alias_id <= 0:
@@ -2590,6 +2649,7 @@ def process_video(path, args):
                 for det, upd in zip(license_dets, updates):
                     plate_id = upd.get('track_id', -1)
                     text_val = upd.get('text', '')
+                    is_guess = bool(upd.get('is_guess', False))
                     row_idx = det.get('row_idx', -1)
                     if row_idx is not None and 0 <= row_idx < len(rows):
                         rows[row_idx][-1] = det.get('text', '')
@@ -2601,6 +2661,7 @@ def process_video(path, args):
                         plate_track_info[plate_id] = {
                             'box': det['box'],
                             'text': text_val,
+                            'is_guess': is_guess,
                             'vehicle_box': det.get('vehicle_box'),
                             'score': float(det.get('score', 0.0)),
                         }
@@ -2648,6 +2709,7 @@ def process_video(path, args):
                         confirmed=confirmed_alias,
                         cleaning_label=cleaning_label,
                         anchor_point=anchor_pt,
+                        plate_is_guess=bool(info.get('is_guess', False)),
                     )
                     alias_seen.add(track_key)
                     plates_with_updates.add(track_key)
@@ -2826,7 +2888,7 @@ def process_video(path, args):
                             fname = f"{session_id}.mp4"
                             base_dir = per_id_session_dir or per_id_video_dir
                             path = base_dir / fname
-                            writer_obj = FfmpegH264Writer(str(path), per_id_target_width, per_id_target_height, fps)
+                            writer_obj = FfmpegH264Writer(str(path), per_id_target_width, per_id_target_height, per_id_output_fps)
                             if writer_obj.is_opened():
                                 per_id_writers[tid] = writer_obj
                                 writer = writer_obj
@@ -2837,16 +2899,18 @@ def process_video(path, args):
                                 break
                         if writer is not None:
                             frame_to_write = frame_out
-                            if per_id_downscale_ratio < 0.999:
-                                frame_to_write = cv2.resize(frame_out, (per_id_target_width, per_id_target_height))
-                            if next_frame_to_write % per_id_frame_stride == 0:
-                                writer.write(frame_to_write)
+                            if frame_to_write is not None:
+                                h, w = frame_to_write.shape[:2]
+                                if w != per_id_target_width or h != per_id_target_height:
+                                    frame_to_write = cv2.resize(frame_to_write, (per_id_target_width, per_id_target_height))
+                                if next_frame_to_write % per_id_frame_stride == 0:
+                                    writer.write(frame_to_write)
                     for tid in to_close:
                         per_id_writers.pop(tid, None)
                 if csv_writer and rows:
                     csv_writer.writerows(rows)
                 next_frame_to_write += 1
-                event_manager.flush_inactive(alias_seen, next_frame_to_write)
+                event_manager.flush_inactive(alias_seen, next_frame_to_write, finalize_per_id_for_track)
                 cleanup_alias_confirm(next_frame_to_write)
             return True
 
@@ -2893,6 +2957,11 @@ def process_video(path, args):
     while finished_workers < len(workers):
         drain_results(block=True)
 
+    if enable_per_id_video and per_id_writers:
+        for writer in per_id_writers.values():
+            writer.release()
+        per_id_writers.clear()
+
     if video_writer:
         video_writer.release()
     if csv_f:
@@ -2901,7 +2970,7 @@ def process_video(path, args):
     monitor_stop.set()
     if monitor_thread:
         monitor_thread.join(timeout=0.5)
-    event_manager.flush_inactive(set(), total_frames + int(config.get('track_timeout_frames', 60)) + 1)
+    event_manager.flush_inactive(set(), total_frames + int(config.get('track_timeout_frames', 60)) + 1, finalize_per_id_for_track)
     cleanup_alias_confirm(total_frames + alias_timeout + 1)
     if uploader:
         uploader.close()

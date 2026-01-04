@@ -52,11 +52,6 @@ class ConfigSaveAsPayload(BaseModel):
     data: Dict
 
 
-class ConfigSaveAsPayload(BaseModel):
-    name: str
-    data: Dict
-
-
 app = FastAPI(title="CleaningCar Zone Editor")
 app.add_middleware(
     CORSMiddleware,
@@ -442,6 +437,22 @@ def index():
     if not TEMPLATE_PATH.exists():
         raise HTTPException(status_code=500, detail="Template missing.")
     return TEMPLATE_PATH.read_text(encoding="utf-8")
+
+
+@app.get("/static/vue.global.prod.js")
+def vue_bundle():
+    path = ROOT / "web" / "static" / "vue.global.prod.js"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Vue bundle missing.")
+    return FileResponse(path)
+
+
+@app.get("/static/{name}")
+def static_file(name: str):
+    path = ROOT / "web" / "static" / name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Static file missing.")
+    return FileResponse(path)
 
 
 @app.get("/zones")

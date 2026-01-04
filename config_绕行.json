@@ -77,7 +77,7 @@
     "stationary_speed_thresh": 8,
     "type34_min_interval_frames": 60,
     "track_timeout_frames": 180,
-    "track_max_age": 80,
+    "track_max_age": 125,
     "lane_name": "冲洗",
     "vehicle_shrink_ratio": 0.35,
     "vehicle_lock_min_votes": 40,
