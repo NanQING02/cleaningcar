@@ -157,6 +157,10 @@ except Exception as exc:
     print("[setup] 请检查 rknn_toolkit_lite2 是否安装、librknnrt.so 是否在系统库路径。")
 EOF
 fi
+if [ -f "$VENV_DIR/bin/activate" ]; then
+  echo "[setup] 激活虚拟环境: $VENV_DIR"
+  . "$VENV_DIR/bin/activate"
+fi
 cd "$SCRIPT_DIR"
 if [ -f "$PID_FILE" ]; then
   OLD_PID=$(cat "$PID_FILE" 2>/dev/null || true)
