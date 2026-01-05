@@ -11,13 +11,13 @@
     "cpu_mask": "6-7"
   },
   "video": {
-    "source": "rtsp://cloud.liveqing.com:10554/live/testrelay?k=testrelay.382bbd84434a5ba4af&token=vR9X9F5aoTHVnktLq3Af8JTuj2WIojCjNZqV7lviYzD.joxNzY3NjIwMjQ5LCJwIjoiNmVmMDFiNTI3MjEwNjEyMWQ4ODM0YTJlYzJmMjI0NTYxZjYwMGIyZjVjZDc2ODNiY2U5YzYyZjZiNzJiMzcyNyIsInQiOjE3Njc2MTk5NDksInUiOiIzZGE1NDQwODJlIn0eyJlI.ciOiJIUzI1NiIsInR5cCI6IkpXVCJ9eyJhbG",
+    "source": "/home/hinlink/下载/video/test03.mp4",
     "source_mode": "camera",
     "hw_decode": true,
-    "workers": 2,
+    "workers": 1,
     "core_mask": "2",
     "save_video": "",
-    "csv": "./video_result/test.csv",
+    "csv": "./video_result/test_bypass.csv",
     "debug_frame_path": "/dev/shm/cleaningcar_debug_B.jpg",
     "debug_frame_interval": 30,
     "segment_minutes": 60,

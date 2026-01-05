@@ -2,7 +2,7 @@
   "system": {
     "device_id": "RK3588-DEV",
     "api": {
-      "url": "http://10.201.28.40:9000",
+      "url": "",
       "token": "",
       "capture_mode": "base64"
     },
@@ -11,10 +11,10 @@
     "cpu_mask": "4-5"
   },
   "video": {
-    "source": "rtsp://cloud.liveqing.com:10554/live/testrelay?k=testrelay.382bbd84434a5ba4af&token=vR9X9F5aoTHVnktLq3Af8JTuj2WIojCjNZqV7lviYzD.joxNzY3NjIwMjQ5LCJwIjoiNmVmMDFiNTI3MjEwNjEyMWQ4ODM0YTJlYzJmMjI0NTYxZjYwMGIyZjVjZDc2ODNiY2U5YzYyZjZiNzJiMzcyNyIsInQiOjE3Njc2MTk5NDksInUiOiIzZGE1NDQwODJlIn0eyJlI.ciOiJIUzI1NiIsInR5cCI6IkpXVCJ9eyJhbG",
+    "source": "/home/hinlink/下载/video/test03.mp4",
     "source_mode": "camera",
     "hw_decode": true,
-    "workers": 2,
+    "workers": 1,
     "core_mask": "0-1",
     "save_video": "",
     "csv": "./video_result/test.csv",

@@ -18,6 +18,7 @@ from queue import Queue
 from config_manager import ConfigManager, ConfigError
 from zone_manager import ZoneManager, polygon_mask
 from utils.disk_manager import DiskCleaner
+from utils.perf_monitor import PerformanceMonitor
 from utils.upload_queue import SQLiteUploadQueue
 
 import cv2
@@ -348,8 +349,9 @@ class FfmpegH264Writer:
             return False
 
     def _start(self):
-        if self._try_start('libx264'):
-            return
+        for enc in ('h264_rkmpp', 'h264_v4l2m2m', 'h264_omx', 'libx264'):
+            if self._try_start(enc):
+                return
         print(f'[per-id-video] no available H.264 encoder for {self.path}')
 
     def is_opened(self):
@@ -496,35 +498,19 @@ def open_video_capture(src, hw_decode=False):
                 "video/x-raw,format=BGR ! appsink sync=false drop=true",
                 '[reader] Using GStreamer+mpp RTSP TCP pipeline for {src}',
             ))
-            pipelines.append((
-                f"rtspsrc location=\"{src}\" latency=200 protocols=tcp ! "
-                "rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! "
-                "video/x-raw,format=BGR ! appsink sync=false drop=true",
-                '[reader] Using GStreamer avdec_h264 RTSP TCP pipeline for {src}',
-            ))
-        elif src.startswith(('http://', 'https://')):
-            pipelines.append((
-                f"souphttpsrc location=\"{src}\" ! decodebin ! videoconvert ! "
-                "video/x-raw,format=BGR ! appsink",
-                '[reader] Using GStreamer HTTP decodebin pipeline for {src}',
-            ))
-        else:
+        elif not src.startswith(('http://', 'https://')):
             pipelines.append((
                 f"filesrc location=\"{src}\" ! qtdemux ! h264parse ! mppvideodec ! "
                 "videoconvert ! video/x-raw,format=BGR ! appsink",
                 '[reader] Using GStreamer+mpp file pipeline for {src}',
-            ))
-            pipelines.append((
-                f"filesrc location=\"{src}\" ! qtdemux ! h264parse ! avdec_h264 ! "
-                "videoconvert ! video/x-raw,format=BGR ! appsink",
-                '[reader] Using GStreamer avdec_h264 file pipeline for {src}',
             ))
         for pipeline, msg in pipelines:
             cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
             if cap.isOpened():
                 print(msg.format(src=src))
                 return cap
-        print(f'[reader] WARNING: hardware/software GStreamer pipeline failed for {src}, falling back to OpenCV VideoCapture (可能带来更大延迟，多路时请谨慎使用软解)')
+        print(f'[reader] 硬解模式下 GStreamer+mpp 解码管道创建失败，源={src}，不回退软解，请检查 mpp 插件和视频源配置')
+        return None
     if isinstance(src, str) and src.startswith(('rtsp://', 'rtsps://')):
         if 'OPENCV_FFMPEG_CAPTURE_OPTIONS' not in os.environ:
             os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp'
@@ -540,10 +526,17 @@ def create_video_reader(path, args):
     hw = bool(getattr(args, 'hw_decode', False))
     cap = open_video_capture(path, hw_decode=hw)
     if not cap or not hasattr(cap, 'isOpened'):
-        return cap
+        if hw:
+            print(f'create_video_reader: 未能创建 GStreamer+mpp 硬解捕获对象，源={path}')
+        else:
+            print(f'create_video_reader: OpenCV 捕获对象创建失败，源={path}')
+        return None
     if not cap.isOpened():
-        mode = 'GStreamer' if hw else 'OpenCV'
-        print(f'create_video_reader: {mode} capture failed for {path}')
+        if hw:
+            print(f'create_video_reader: GStreamer+mpp 硬解捕获打开失败，源={path}')
+        else:
+            print(f'create_video_reader: OpenCV 捕获打开失败，源={path}')
+        return None
     return cap
 
 
@@ -681,6 +674,19 @@ def resize_for_letterbox(im, new_unpad):
         except Exception as exc:
             print(f'[rga-resize] failed, fallback to cv2: {exc}')
     return cv2.resize(im, new_unpad, interpolation=cv2.INTER_LINEAR)
+
+
+def draw_metrics_overlay(frame, lines):
+    if frame is None or not lines:
+        return
+    h, w = frame.shape[:2]
+    scale = max(0.45, min(w, h) / 960.0 * 0.6)
+    thickness = max(1, int(scale * 2))
+    line_gap = max(14, int(18 * scale))
+    y = h - 10
+    for text in reversed(lines):
+        cv2.putText(frame, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), thickness, cv2.LINE_AA)
+        y -= line_gap
 
 
 def sigmoid(x):
@@ -1277,6 +1283,15 @@ class EventManager:
             if not self.upload_log_sent.exists():
                 with self.upload_log_sent.open('w', encoding='utf-8') as f:
                     f.write('capture_time,id,type,payload\n')
+        self.frame_timing = {}
+
+    def record_frame_timing(self, frame_idx, capture_ts, infer_ts):
+        if capture_ts is None or infer_ts is None:
+            return
+        try:
+            self.frame_timing[int(frame_idx)] = (float(capture_ts), float(infer_ts))
+        except Exception:
+            return
 
     def frame_timestamp(self, frame_idx):
         return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1833,6 +1848,24 @@ class EventManager:
             event['cleanliness'] = self.default_cleanliness
         if track_state.get('wash_start_time') and not event.get('washStartTime'):
             event['washStartTime'] = track_state.get('wash_start_time')
+        capture_ts_val = None
+        infer_ts_val = None
+        if hasattr(self, 'frame_timing'):
+            t = self.frame_timing.get(int(frame_idx))
+            if t:
+                capture_ts_val, infer_ts_val = t
+        if capture_ts_val is not None and infer_ts_val is not None:
+            now_ts = time.time()
+            decode_to_infer = max(0.0, infer_ts_val - capture_ts_val)
+            infer_to_event = max(0.0, now_ts - infer_ts_val)
+            total_latency = max(0.0, now_ts - capture_ts_val)
+            try:
+                cap_str = datetime.fromtimestamp(capture_ts_val).strftime("%H:%M:%S.%f")[:-3]
+                infer_str = datetime.fromtimestamp(infer_ts_val).strftime("%H:%M:%S.%f")[:-3]
+                event_str = datetime.fromtimestamp(now_ts).strftime("%H:%M:%S.%f")[:-3]
+                print(f"[latency] 帧={frame_idx} 轨迹={track_id} 类型={event_type} 捕获={cap_str} 推理完成={infer_str} 告警发送={event_str} 解码→推理={decode_to_infer*1000:.1f}ms 推理→告警={infer_to_event*1000:.1f}ms 总时延={total_latency*1000:.1f}ms")
+            except Exception:
+                pass
         event_path = self.events_dir / f'{self.camera_id}_{track_id}_t{event_type}_{frame_idx}.json'
         try:
             with event_path.open('w', encoding='utf-8') as f:
@@ -2253,7 +2286,11 @@ class DetectWorker(threading.Thread):
             if item is None:
                 self.task_q.task_done()
                 break
-            frame_idx, frame = item
+            if len(item) == 2:
+                frame_idx, frame = item
+                capture_ts = None
+            else:
+                frame_idx, frame, capture_ts = item
             proc_frame = frame
             if self.detect_mask is not None:
                 proc_frame = cv2.bitwise_and(frame, frame, mask=self.detect_mask)
@@ -2265,7 +2302,7 @@ class DetectWorker(threading.Thread):
             self.infer_time += infer_time
             self.frames += 1
             if not outputs or len(outputs) != 9:
-                self.result_q.put((frame_idx, frame, [], []))
+                self.result_q.put((frame_idx, capture_ts, frame, [], []))
                 self.task_q.task_done()
                 continue
             boxes_list = []
@@ -2286,7 +2323,7 @@ class DetectWorker(threading.Thread):
                 classes_list.append(cls_ids[keep])
                 cls_prob_list.append(cls_probs[keep])
             if not boxes_list:
-                self.result_q.put((frame_idx, frame, [], []))
+                self.result_q.put((frame_idx, capture_ts, frame, [], []))
                 self.task_q.task_done()
                 continue
             boxes = np.concatenate(boxes_list, axis=0)
@@ -2328,7 +2365,7 @@ class DetectWorker(threading.Thread):
                     'row_idx': len(csv_rows) - 1,
                     'label': label_name,
                 })
-            self.result_q.put((frame_idx, draw_frame, csv_rows, det_payload))
+            self.result_q.put((frame_idx, capture_ts, draw_frame, csv_rows, det_payload))
             self.task_q.task_done()
         self.result_q.put(None)
 
@@ -2403,7 +2440,7 @@ def monitor_loop(interval, stop_event):
 
 def process_video(path, args):
     cap = create_video_reader(path, args)
-    if not cap.isOpened():
+    if cap is None or not hasattr(cap, 'isOpened') or not cap.isOpened():
         print(f'failed to open {path}')
         return
     fps = None
@@ -2436,6 +2473,10 @@ def process_video(path, args):
     reconnect_count = 0
 
     base_dir = getattr(args, '_config_dir', Path.cwd())
+    metrics_path_conf = system_cfg.get('metrics_path', '/dev/shm/cleaningcar_metrics.json')
+    metrics_path = None
+    if metrics_path_conf:
+        metrics_path = _resolve_runtime_path(metrics_path_conf, base_dir)
     zones_cfg = config.get('zones', {})
     logic_cfg = config.get('logic', {})
     anchor_offset_ratio = float(logic_cfg.get('anchor_offset_ratio', 0.0))
@@ -2576,6 +2617,8 @@ def process_video(path, args):
     reader_log_interval = float(config.get('reader_fps_log_interval', 10.0))
     reader_log_last_time = start
     reader_log_frames = 0
+    worker_last_frames = [0 for _ in workers]
+    worker_last_infer = [0.0 for _ in workers]
 
     car_plate_cache = {}
     car_plate_cache_ttl = int(config.get('car_plate_cache_ttl', CAR_PLATE_CACHE_TTL))
@@ -2691,10 +2734,19 @@ def process_video(path, args):
         if item is None:
             finished_workers += 1
         else:
-            idx, frame_out, rows, det_payload = item
-            pending[idx] = (frame_out, rows, det_payload)
+            if len(item) == 4:
+                idx, frame_out, rows, det_payload = item
+                capture_ts = None
+            else:
+                idx, capture_ts, frame_out, rows, det_payload = item
+            pending[idx] = (frame_out, rows, det_payload, capture_ts)
             while next_frame_to_write in pending:
-                frame_out, rows, det_payload = pending.pop(next_frame_to_write)
+                frame_out, rows, det_payload, capture_ts = pending.pop(next_frame_to_write)
+                if capture_ts is not None:
+                    try:
+                        event_manager.record_frame_timing(next_frame_to_write, capture_ts, time.time())
+                    except Exception:
+                        pass
                 vehicle_dets = []
                 vehicle_payload_refs = []
                 car_boxes = {}
@@ -3045,14 +3097,34 @@ def process_video(path, args):
             time.sleep(reader_reconnect_delay)
             continue
         consecutive_fails = 0
-        task_q.put((total_frames, frame))
+        capture_ts = time.time()
+        task_q.put((total_frames, frame, capture_ts))
         total_frames += 1
         reader_log_frames += 1
         now = time.time()
         if reader_log_interval > 0 and now - reader_log_last_time >= reader_log_interval:
             elapsed_window = now - reader_log_last_time
-            fps_window = reader_log_frames / max(elapsed_window, 1e-6)
-            print(f'[reader] decode_fps={fps_window:.2f} window={elapsed_window:.1f}s total_frames={total_frames}')
+            decode_fps_window = reader_log_frames / max(elapsed_window, 1e-6)
+            pipeline_frames_window = 0
+            worker_msgs = []
+            for i, w in enumerate(workers):
+                frames_delta = max(0, w.frames - worker_last_frames[i])
+                infer_delta = max(0.0, w.infer_time - worker_last_infer[i])
+                worker_last_frames[i] = w.frames
+                worker_last_infer[i] = w.infer_time
+                if frames_delta > 0 and elapsed_window > 0:
+                    worker_fps = frames_delta / elapsed_window
+                else:
+                    worker_fps = 0.0
+                if frames_delta > 0 and infer_delta > 0.0:
+                    infer_ms = infer_delta * 1000.0 / frames_delta
+                else:
+                    infer_ms = 0.0
+                pipeline_frames_window += frames_delta
+                worker_msgs.append(f'w{i}:{worker_fps:.2f}fps/{infer_ms:.1f}ms')
+            pipeline_fps_window = pipeline_frames_window / max(elapsed_window, 1e-6) if pipeline_frames_window > 0 else 0.0
+            workers_str = ', '.join(worker_msgs)
+            print(f'[perf] 解码FPS={decode_fps_window:.2f} 管线FPS={pipeline_fps_window:.2f} 窗口={elapsed_window:.1f}s 总帧数={total_frames} 工人[{workers_str}]')
             reader_log_frames = 0
             reader_log_last_time = now
         while result_q.qsize() > args.queue_size // 2:
