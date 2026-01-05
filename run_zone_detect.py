@@ -24,6 +24,13 @@ import cv2
 import numpy as np
 from rknnlite.api import RKNNLite
 
+RGA_RESIZE_FUNC = None
+try:
+    from rga_resize_plugin import rga_resize
+    RGA_RESIZE_FUNC = rga_resize
+except Exception:
+    RGA_RESIZE_FUNC = None
+
 try:
     import yaml
 except ImportError:
@@ -258,6 +265,11 @@ class FfmpegH264Writer:
         self.stdin = None
         self.encoder = None
         self._opened = False
+        self._frames_total = 0
+        self._frames_since_log = 0
+        self._start_time = time.time()
+        self._last_log_time = self._start_time
+        self._log_interval = 10.0
         self._start()
 
     def _build_cmd(self, encoder):
@@ -276,20 +288,28 @@ class FfmpegH264Writer:
             '-',
             '-an',
         ]
-        opts = [
-            '-c:v',
-            'libx264',
-            '-profile:v',
-            'baseline',
-            '-level',
-            '3.1',
-            '-preset',
-            'veryfast',
-            '-crf',
-            '28',
-            '-pix_fmt',
-            'yuv420p',
-        ]
+        if encoder in ('h264_rkmpp', 'h264_v4l2m2m', 'h264_omx'):
+            opts = [
+                '-c:v',
+                encoder,
+                '-pix_fmt',
+                'yuv420p',
+            ]
+        else:
+            opts = [
+                '-c:v',
+                'libx264',
+                '-profile:v',
+                'baseline',
+                '-level',
+                '3.1',
+                '-preset',
+                'veryfast',
+                '-crf',
+                '28',
+                '-pix_fmt',
+                'yuv420p',
+            ]
         tail = [
             '-movflags',
             '+faststart',
@@ -300,9 +320,22 @@ class FfmpegH264Writer:
     def _try_start(self, encoder):
         cmd = self._build_cmd(encoder)
         try:
-            self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+            self.proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
             self.stdin = self.proc.stdin
             self.encoder = encoder
+            time.sleep(0.2)
+            if self.proc.poll() is not None:
+                self.proc = None
+                self.stdin = None
+                self.encoder = None
+                self._opened = False
+                print(f'[per-id-video] encoder {encoder} exited immediately for {self.path}, falling back')
+                return False
             self._opened = True
             print(f'[per-id-video] using ffmpeg encoder={encoder} path={self.path}')
             return True
@@ -333,11 +366,21 @@ class FfmpegH264Writer:
             return
         try:
             self.stdin.write(frame.tobytes())
+            self._frames_total += 1
+            self._frames_since_log += 1
+            now = time.time()
+            if self._log_interval > 0 and now - self._last_log_time >= self._log_interval:
+                elapsed = now - self._last_log_time
+                fps = self._frames_since_log / max(elapsed, 1e-6)
+                print(f'[per-id-video] encoder={self.encoder} fps={fps:.2f} window={elapsed:.1f}s total_frames={self._frames_total} path={self.path}')
+                self._frames_since_log = 0
+                self._last_log_time = now
         except Exception as exc:
             print(f'[per-id-video] write failed for {self.path}: {exc}')
             self.release()
 
     def release(self):
+        finalized = False
         if self.stdin:
             try:
                 self.stdin.close()
@@ -364,8 +407,10 @@ class FfmpegH264Writer:
                     else:
                         os.replace(self._output_path, self.path)
                         print(f'[per-id-video] finalized video: {self.path}')
+                        finalized = True
             except Exception as exc:
                 print(f'[per-id-video] rename failed {self._output_path} -> {self.path}: {exc}')
+        return finalized
 def parse_args():
     ap = argparse.ArgumentParser(description='Multithread RKNN detector demo.')
     ap.add_argument('--model', default='best.rknn')
@@ -443,27 +488,50 @@ def parse_core_mask(text: str):
 
 def open_video_capture(src, hw_decode=False):
     if hw_decode and isinstance(src, str):
+        pipelines = []
         if src.startswith(('rtsp://', 'rtsps://')):
-            pipeline = (
-                f"rtspsrc location=\"{src}\" latency=200 ! "
+            pipelines.append((
+                f"rtspsrc location=\"{src}\" latency=200 protocols=tcp ! "
                 "rtph264depay ! h264parse ! mppvideodec ! videoconvert ! "
-                "video/x-raw,format=BGR ! appsink sync=false drop=true"
-            )
+                "video/x-raw,format=BGR ! appsink sync=false drop=true",
+                '[reader] Using GStreamer+mpp RTSP TCP pipeline for {src}',
+            ))
+            pipelines.append((
+                f"rtspsrc location=\"{src}\" latency=200 protocols=tcp ! "
+                "rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! "
+                "video/x-raw,format=BGR ! appsink sync=false drop=true",
+                '[reader] Using GStreamer avdec_h264 RTSP TCP pipeline for {src}',
+            ))
         elif src.startswith(('http://', 'https://')):
-            pipeline = (
+            pipelines.append((
                 f"souphttpsrc location=\"{src}\" ! decodebin ! videoconvert ! "
-                "video/x-raw,format=BGR ! appsink"
-            )
+                "video/x-raw,format=BGR ! appsink",
+                '[reader] Using GStreamer HTTP decodebin pipeline for {src}',
+            ))
         else:
-            pipeline = (
+            pipelines.append((
                 f"filesrc location=\"{src}\" ! qtdemux ! h264parse ! mppvideodec ! "
-                "videoconvert ! video/x-raw,format=BGR ! appsink"
-            )
-        cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+                "videoconvert ! video/x-raw,format=BGR ! appsink",
+                '[reader] Using GStreamer+mpp file pipeline for {src}',
+            ))
+            pipelines.append((
+                f"filesrc location=\"{src}\" ! qtdemux ! h264parse ! avdec_h264 ! "
+                "videoconvert ! video/x-raw,format=BGR ! appsink",
+                '[reader] Using GStreamer avdec_h264 file pipeline for {src}',
+            ))
+        for pipeline, msg in pipelines:
+            cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+            if cap.isOpened():
+                print(msg.format(src=src))
+                return cap
+        print(f'[reader] WARNING: hardware/software GStreamer pipeline failed for {src}, falling back to OpenCV VideoCapture (可能带来更大延迟，多路时请谨慎使用软解)')
+    if isinstance(src, str) and src.startswith(('rtsp://', 'rtsps://')):
+        if 'OPENCV_FFMPEG_CAPTURE_OPTIONS' not in os.environ:
+            os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp'
+        cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
         if cap.isOpened():
-            print(f'Using GStreamer+mpp pipeline for {src}')
+            print(f'[reader] Using OpenCV FFmpeg RTSP TCP capture for {src}')
             return cap
-        print('hardware decode pipeline failed, fallback to default OpenCV source')
     return cv2.VideoCapture(src)
 
 
@@ -599,11 +667,20 @@ def letterbox(im, new_shape=640, color=(114, 114, 114)):
     dw /= 2
     dh /= 2
     if shape[::-1] != new_unpad:
-        im = cv2.resize(im, new_unpad, interpolation=cv2.INTER_LINEAR)
+        im = resize_for_letterbox(im, new_unpad)
     top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
     left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
     im = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
     return im, ratio, (dw, dh)
+
+
+def resize_for_letterbox(im, new_unpad):
+    if RGA_RESIZE_FUNC is not None:
+        try:
+            return RGA_RESIZE_FUNC(im, new_unpad)
+        except Exception as exc:
+            print(f'[rga-resize] failed, fallback to cv2: {exc}')
+    return cv2.resize(im, new_unpad, interpolation=cv2.INTER_LINEAR)
 
 
 def sigmoid(x):
@@ -1181,6 +1258,7 @@ class EventManager:
             self.allowed_events = set(int(x) for x in allowed)
         else:
             self.allowed_events = {1, 2, 3, 4, 5}
+        self.allowed_events.add(6)
         self.disable_plate_only_events = True
         self.single_lifecycle_events = True
         self.require_vehicle_type_for_events = bool(self.logic.get('require_vehicle_type_for_events', False))
@@ -1201,8 +1279,7 @@ class EventManager:
                     f.write('capture_time,id,type,payload\n')
 
     def frame_timestamp(self, frame_idx):
-        ts = self.base_time + timedelta(seconds=frame_idx / max(self.fps, 1e-6))
-        return ts.strftime('%Y-%m-%d %H:%M:%S')
+        return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     def update_track(self, track_id, plate_box, vehicle_box, plate_text, frame_idx, frame,
                      water_boxes, water_active, is_plate, vehicle_label, vehicle_conf,
@@ -2022,6 +2099,11 @@ class EventManager:
         if not self.uploader:
             return None
         evt_type = event['type']
+        if evt_type == 6:
+            return {
+                'id': event['id'],
+                'type': evt_type,
+            }
         plate_conf = round(self._avg(track_state.get('plate_conf_history')), 3)
         vehicle_conf = round(self._avg(track_state.get('vehicle_conf_history')), 3)
         raw_vehicle_type = event.get('vehicleType') or self._resolve_vehicle_type(track_state)
@@ -2491,6 +2573,9 @@ def process_video(path, args):
     next_frame_to_write = 0
     pending = {}
     finished_workers = 0
+    reader_log_interval = float(config.get('reader_fps_log_interval', 10.0))
+    reader_log_last_time = start
+    reader_log_frames = 0
 
     car_plate_cache = {}
     car_plate_cache_ttl = int(config.get('car_plate_cache_ttl', CAR_PLATE_CACHE_TTL))
@@ -2524,10 +2609,30 @@ def process_video(path, args):
     if per_id_frame_stride < 1:
         per_id_frame_stride = 1
 
-    def finalize_per_id_for_track(track_id, track_state):
+    def close_per_id_writer(track_id, track_state):
         writer = per_id_writers.pop(track_id, None)
-        if writer is not None:
-            writer.release()
+        if writer is None:
+            return
+        finalized = False
+        try:
+            finalized = bool(writer.release())
+        except Exception:
+            finalized = False
+        if not finalized:
+            return
+        if not track_state:
+            track_state = {}
+        frame_idx = track_state.get('record_stop_frame')
+        if frame_idx is None:
+            frame_idx = track_state.get('last_frame_idx', 0)
+        frame = track_state.get('last_frame')
+        try:
+            event_manager.emit_event(track_id, 6, frame_idx, frame, {}, track_state)
+        except Exception:
+            return
+
+    def finalize_per_id_for_track(track_id, track_state):
+        close_per_id_writer(track_id, track_state)
 
     def mark_alias_confirm(alias_id, has_plate_text, frame_idx, require_text):
         if alias_id <= 0:
@@ -2850,17 +2955,13 @@ def process_video(path, args):
                     except Exception:
                         pass
                 if enable_per_id_video and frame_out is not None:
-                    to_close = []
                     for tid, st in event_manager.tracks.items():
                         start_f = st.get('record_start_frame')
                         stop_f = st.get('record_stop_frame')
                         if start_f is None:
                             continue
                         if stop_f is not None and next_frame_to_write > stop_f:
-                            writer = per_id_writers.get(tid)
-                            if writer is not None:
-                                writer.release()
-                                to_close.append(tid)
+                            close_per_id_writer(tid, st)
                             continue
                         if next_frame_to_write < start_f:
                             continue
@@ -2905,8 +3006,6 @@ def process_video(path, args):
                                     frame_to_write = cv2.resize(frame_to_write, (per_id_target_width, per_id_target_height))
                                 if next_frame_to_write % per_id_frame_stride == 0:
                                     writer.write(frame_to_write)
-                    for tid in to_close:
-                        per_id_writers.pop(tid, None)
                 if csv_writer and rows:
                     csv_writer.writerows(rows)
                 next_frame_to_write += 1
@@ -2948,6 +3047,14 @@ def process_video(path, args):
         consecutive_fails = 0
         task_q.put((total_frames, frame))
         total_frames += 1
+        reader_log_frames += 1
+        now = time.time()
+        if reader_log_interval > 0 and now - reader_log_last_time >= reader_log_interval:
+            elapsed_window = now - reader_log_last_time
+            fps_window = reader_log_frames / max(elapsed_window, 1e-6)
+            print(f'[reader] decode_fps={fps_window:.2f} window={elapsed_window:.1f}s total_frames={total_frames}')
+            reader_log_frames = 0
+            reader_log_last_time = now
         while result_q.qsize() > args.queue_size // 2:
             drain_results(block=False)
 
@@ -2958,9 +3065,9 @@ def process_video(path, args):
         drain_results(block=True)
 
     if enable_per_id_video and per_id_writers:
-        for writer in per_id_writers.values():
-            writer.release()
-        per_id_writers.clear()
+        for tid in list(per_id_writers.keys()):
+            track_state = event_manager.tracks.get(tid) or {}
+            close_per_id_writer(tid, track_state)
 
     if video_writer:
         video_writer.release()

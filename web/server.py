@@ -27,8 +27,8 @@ EVENT_LOG_PATH = ROOT / "events" / "event_log.csv"
 
 
 class FlowVector(BaseModel):
-    start: List[float] = Field(..., min_items=2, max_items=2)
-    end: List[float] = Field(..., min_items=2, max_items=2)
+    start: List[float] = Field(..., min_length=2, max_length=2)
+    end: List[float] = Field(..., min_length=2, max_length=2)
 
 
 class ZonePayload(BaseModel):
@@ -936,7 +936,14 @@ def main():
     args = parse_args()
     global CONFIG_PATH
     CONFIG_PATH = Path(args.config).resolve()
-    uvicorn.run("web.server:app", host=args.host, port=args.port, reload=args.reload)
+    uvicorn.run(
+        "web.server:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        log_level="warning",
+        access_log=False,
+    )
 
 
 if __name__ == "__main__":

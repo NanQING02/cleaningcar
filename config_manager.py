@@ -41,6 +41,8 @@ class ConfigManager:
         system['api'].setdefault('url', '')
         system['api'].setdefault('token', '')
         system['api'].setdefault('capture_mode', 'path')
+        system.setdefault('metrics_path', '/dev/shm/cleaningcar_metrics.json')
+        system.setdefault('cpu_mask', '')
 
         video = self.data.setdefault('video', {})
         if 'source' not in video:
@@ -53,6 +55,8 @@ class ConfigManager:
         video.setdefault('csv', '')
         video.setdefault('debug_frame_path', '/dev/shm/cleaningcar_debug.jpg')
         video.setdefault('debug_frame_interval', 30)
+        video.setdefault('debug_frame_max_width', 960)
+        video.setdefault('debug_frame_quality', 80)
         try:
             segment_minutes = int(video.get('segment_minutes', 60))
         except (TypeError, ValueError):
@@ -77,7 +81,7 @@ class ConfigManager:
         logic.setdefault('stationary_speed_thresh', 8.0)
         logic.setdefault('type34_min_interval_frames', 5)
         logic.setdefault('track_timeout_frames', 90)
-        logic.setdefault('track_max_age', 60)
+        logic.setdefault('track_max_age', 120)
         logic.setdefault('vehicle_iou_threshold', 0.3)
         logic.setdefault('vehicle_center_gate_ratio', 0.0)
         logic['disable_plate_only_events'] = True
@@ -95,7 +99,7 @@ class ConfigManager:
         logic.setdefault('default_plate_color_conf', 0.0)
         logic.setdefault('default_cleanliness', 0)
         logic.setdefault('car_plate_cache_ttl', 60)
-        logic.setdefault('allowed_event_types', [1, 2, 3, 4, 5])
+        logic.setdefault('allowed_event_types', [1, 2, 3, 4, 5, 6])
         logic.setdefault('anchor_offset_ratio', 0.0)
         logic.setdefault('zone_b_anchor_min_frames', 0)
         logic.setdefault('debug_overlay', False)
@@ -109,6 +113,11 @@ class ConfigManager:
         logic.setdefault('per_id_video_dir', './video_result/per_id')
         logic.setdefault('per_id_downscale_ratio', 1.0)
         logic.setdefault('per_id_frame_stride', 1)
+        logic.setdefault('per_id_auto_adapt', False)
+        logic.setdefault('per_id_auto_cpu_high', 75.0)
+        logic.setdefault('per_id_auto_cpu_low', 50.0)
+        logic.setdefault('per_id_max_frame_stride', 3)
+        logic.setdefault('enable_event_disk', False)
         shadow = logic.setdefault('shadow_plate_pool', {})
         shadow.setdefault('max_candidates', 50)
         shadow.setdefault('max_age_frames', 120)
@@ -117,6 +126,8 @@ class ConfigManager:
         storage.setdefault('disk_threshold', 65.0)
         storage.setdefault('disk_target', 50.0)
         storage.setdefault('clean_interval_seconds', 600)
+
+        self.data.setdefault('event_capture_quality', 85)
 
         cfg_name = self.path.stem or 'default'
         default_events = f'events/{cfg_name}'

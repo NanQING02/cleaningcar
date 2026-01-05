@@ -3,3 +3,12 @@ packages/py38_rk3588.tar.gz
 .vscode/
 .logs/
 ._pycache_/
+venv-gst/
+__pycache__/config_manager.cpython-38.pyc
+__pycache__/config_manager.cpython-312.pyc
+__pycache__/run_zone_detect.cpython-38.pyc
+utils/__pycache__/__init__.cpython-38.pyc
+web/__pycache__/server.cpython-38.pyc
+web/__pycache__/server.cpython-312.pyc
+web_server_8000.log
+web_server_8000.pid

@@ -25,7 +25,7 @@
   - 磁盘清理：`DiskCleaner`，见 `utils/disk_manager.py:29`；入口初始化见 `run_zone_detect.py:2357`。
 - 远程控制台
   - FastAPI 路由与 Guardian：`web/server.py`，推理进程管理类见 `web/server.py:76`；路由汇总见 `web/server.py:352` 附近。
-  - 前端模板：`web/templates/zone_editor.html`，支持画布编辑 Zone/流向、日志、实时调试帧。
+  - 前端模板：`web/templates/zone_editor.html`，支持画布编辑 Zone/流向、日志、实时调试帧，并提供“多实例管理”面板，可同时启动/停止多个配置对应的推理进程。
 
 ## 3. 运行方式
 - 命令行运行
@@ -43,6 +43,7 @@
   - `device_id`：摄像头/设备标识；用于事件 `id` 前缀。
   - `api.url` / `api.token` / `api.capture_mode`：事件上报接口、鉴权、截图字段格式（当前配置为 `base64`，即对 JPG 二进制做标准 Base64 编码后作为纯字符串上报，不带 `data:image/jpeg;base64,` 前缀）。
   - `monitor_interval`：资源监控日志周期（秒），见 `run_zone_detect.py:1743`。
+  - `cpu_mask`：Guardian 拉起推理子进程时设置的 CPU 亲和力（如 `0-3,8`），便于多实例在 RK3588 大小核之间划分资源，避免互相争抢。
 - `video`
   - `source` / `source_mode`：数据源（RTSP/文件路径）；自动/指定 `camera|file`（`run_zone_detect.py:1789`）。
   - `hw_decode`：启用 GStreamer+mpp 硬解（`run_zone_detect.py:311`）。
@@ -91,6 +92,9 @@
   - `GET /frame|/debug_frame` 与 `GET /logs/events|/logs/detections|/logs/inference`：帧/日志读取。
 - 前端画布（`web/templates/zone_editor.html`）
   - 归一化坐标绘制；命中顶点与拖拽、流向起止点调整、撤销等交互（如 `zone_editor.html:575`、`zone_editor.html:733`）。
+- 多实例调试/监控
+  - 「多实例管理」面板可对任意配置（多路摄像头）执行 Guardian start/stop/restart，并为每个子进程设置独立的 `system.cpu_mask`。
+  - 实时调试画面/性能监控支持以实例下拉框选择数据来源，所有 `/frame*`、`/debug_frame*`、`/metrics/runtime` 请求都会附带 `key=`，便于在不切换配置文件的情况下查看其它实例的画面与指标。
 
 ## 8. 数据目录与文件
 - 事件 JSON：`events/*.json`；事件 CSV 汇总：`events/event_log.csv`（`web/server.py:24`）。
@@ -163,3 +167,7 @@
 - 2025-12-25 | AI | 调整轨迹生命周期控制以避免 closed 状态影响后续车辆  
   - 在 `run_zone_detect.py:1383-1430` 的 `EventManager.flush_inactive` 中，将超时清理逻辑拆分为两层：首先继续在必要时补发 Type4/Type5 事件，然后仅在轨迹已经拥有合法 Type5（`5 in st['events']`）且 `logic.single_lifecycle_events=True` 时才将其标记为 `closed`，避免短暂噪声轨迹或仅进入 ZoneA 未满足 Type5 门槛的轨迹被误设为 closed。  
   - 同时，无论 `single_lifecycle_events` 开关状态如何，在超时清理阶段都会对该 `track_id` 对应的内部状态条目执行 `self.tracks.pop(tid, None)`，确保后续上游检测器若复用相同数字 ID，`EventManager` 会将其视作全新的生命周期重新统计 ZoneA/B 停留与事件触发条件，从而避免 id9、17、20-25 这类“前段短噪声 + 后段真实业务”情况下，后段业务因继承 closed 状态而完全不产出 Type1-5 事件的问题。  
+- 2026-01-05 | AI | 多实例调试画面与 CPU 亲和力配置  
+  - 在 `web/templates/zone_editor.html` 新增 `system.cpu_mask` 输入框，并将“实时调试画面”改为带实例下拉，可选择任意 Guardian 子进程的帧缓存/调试 JPG/性能指标；与之匹配地，前端所有 `/frame_meta`、`/frame`、`/frame/reload`、`/debug_frame_meta`、`/debug_frame`、`/metrics/runtime` 请求都携带 `key=`，并在切换实例时自动刷新画面与指标。  
+  - 在 `web/server.py` 的 `/metrics/runtime` 路由支持 `key` 参数，读取对应配置文件的 metrics JSON，确保多实例时性能面板不会串台。  
+  - 文档新增 `system.cpu_mask` 说明与“多实例调试/监控”小节，记录 Guardian 绑定 CPU/查看不同实例调试画面的用法。  

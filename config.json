@@ -6,19 +6,23 @@
       "token": "",
       "capture_mode": "base64"
     },
-    "monitor_interval": 30
+    "monitor_interval": 30,
+    "metrics_path": "/dev/shm/metrics_laneA.json",
+    "cpu_mask": "4-5"
   },
   "video": {
-    "source": "/home/hinlink/下载/video/test03.mp4",
-    "source_mode": "file",
+    "source": "rtsp://cloud.liveqing.com:10554/live/testrelay?k=testrelay.382bbd84434a5ba4af&token=vR9X9F5aoTHVnktLq3Af8JTuj2WIojCjNZqV7lviYzD.joxNzY3NjIwMjQ5LCJwIjoiNmVmMDFiNTI3MjEwNjEyMWQ4ODM0YTJlYzJmMjI0NTYxZjYwMGIyZjVjZDc2ODNiY2U5YzYyZjZiNzJiMzcyNyIsInQiOjE3Njc2MTk5NDksInUiOiIzZGE1NDQwODJlIn0eyJlI.ciOiJIUzI1NiIsInR5cCI6IkpXVCJ9eyJhbG",
+    "source_mode": "camera",
     "hw_decode": true,
     "workers": 2,
-    "core_mask": "0-2",
+    "core_mask": "0-1",
     "save_video": "",
     "csv": "./video_result/test.csv",
-    "debug_frame_path": "/dev/shm/cleaningcar_debug.jpg",
+    "debug_frame_path": "/dev/shm/cleaningcar_debug_A.jpg",
     "debug_frame_interval": 30,
-    "segment_minutes": 60
+    "segment_minutes": 60,
+    "debug_frame_max_width": 960,
+    "debug_frame_quality": 80
   },
   "zones": {
     "zone_a_detection": [
@@ -96,7 +100,8 @@
       2,
       3,
       4,
-      5
+      5,
+      6
     ],
     "debug_overlay": true,
     "debug_track_state": true,
@@ -118,7 +123,12 @@
     "enable_per_id_video": true,
     "per_id_video_dir": "./video_result/per_id",
     "per_id_downscale_ratio": 1,
-    "per_id_frame_stride": 1
+    "per_id_frame_stride": 1,
+    "per_id_auto_adapt": false,
+    "per_id_auto_cpu_high": 75,
+    "per_id_auto_cpu_low": 50,
+    "per_id_max_frame_stride": 3,
+    "enable_event_disk": false
   },
   "storage": {
     "disk_threshold": 65,
@@ -126,5 +136,6 @@
     "clean_interval_seconds": 600
   },
   "event_output_dir": "events/config",
-  "event_capture_dir": "captures/config"
+  "event_capture_dir": "captures/config",
+  "event_capture_quality": 85
 }
