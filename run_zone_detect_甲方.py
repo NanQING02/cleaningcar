@@ -82,11 +82,11 @@ CLASS_ALIAS_TO_ID = {name.lower(): idx for idx, name in enumerate(CLASS_NAMES)}
 VEHICLE_CLASS_IDS = {0, 1, 2, 3, 4}
 WATER_CLASS_IDS = {6, 7}
 CLASS_THRESH = {
-    0: 0.32,
-    1: 0.32,
-    2: 0.32,
-    3: 0.32,
-    4: 0.32,
+    0: 0.45,
+    1: 0.45,
+    2: 0.45,
+    3: 0.45,
+    4: 0.45,
     5: 0.30,
     6: 0.30,
     7: 0.30,
@@ -349,7 +349,7 @@ class FfmpegH264Writer:
             return False
 
     def _start(self):
-        for enc in ('h264_rkmpp', 'h264_v4l2m2m', 'h264_omx', 'libx264'):
+        for enc in ('libx264', 'h264_rkmpp', 'h264_v4l2m2m', 'h264_omx'):
             if self._try_start(enc):
                 return
         print(f'[per-id-video] no available H.264 encoder for {self.path}')

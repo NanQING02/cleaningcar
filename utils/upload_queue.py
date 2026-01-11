@@ -19,7 +19,7 @@ class SQLiteUploadQueue:
         self._init_schema()
 
     def _init_schema(self):
-        with self.conn:
+        with self._lock:
             self.conn.execute(
                 'CREATE TABLE IF NOT EXISTS queue ('
                 'id INTEGER PRIMARY KEY AUTOINCREMENT,'
@@ -29,15 +29,25 @@ class SQLiteUploadQueue:
                 'created REAL NOT NULL'
                 ')'
             )
+            if self.conn.in_transaction:
+                try:
+                    self.conn.commit()
+                except sqlite3.OperationalError:
+                    pass
 
     def enqueue(self, payload: dict):
         data = json.dumps(payload, ensure_ascii=False)
         now = time.time()
-        with self.conn:
+        with self._lock:
             self.conn.execute(
                 'INSERT INTO queue (payload, retries, next_retry, created) VALUES (?, 0, 0, ?)',
                 (data, now)
             )
+            if self.conn.in_transaction:
+                try:
+                    self.conn.commit()
+                except sqlite3.OperationalError:
+                    pass
 
     def next_job(self) -> Optional[Tuple[int, dict, int]]:
         now = time.time()
@@ -56,16 +66,26 @@ class SQLiteUploadQueue:
             return job_id, payload, int(retries)
 
     def mark_success(self, job_id: int):
-        with self.conn:
+        with self._lock:
             self.conn.execute('DELETE FROM queue WHERE id=?', (job_id,))
+            if self.conn.in_transaction:
+                try:
+                    self.conn.commit()
+                except sqlite3.OperationalError:
+                    pass
 
     def mark_failure(self, job_id: int, retries: int, delay_seconds: float):
         next_retry = time.time() + max(1.0, float(delay_seconds))
-        with self.conn:
+        with self._lock:
             self.conn.execute(
                 'UPDATE queue SET retries=?, next_retry=? WHERE id=?',
                 (retries, next_retry, job_id)
             )
+            if self.conn.in_transaction:
+                try:
+                    self.conn.commit()
+                except sqlite3.OperationalError:
+                    pass
 
     def pending(self) -> int:
         with self._lock:
