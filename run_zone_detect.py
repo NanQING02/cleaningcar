@@ -82,11 +82,11 @@ CLASS_ALIAS_TO_ID = {name.lower(): idx for idx, name in enumerate(CLASS_NAMES)}
 VEHICLE_CLASS_IDS = {0, 1, 2, 3, 4}
 WATER_CLASS_IDS = {6, 7}
 CLASS_THRESH = {
-    0: 0.32,
-    1: 0.32,
-    2: 0.32,
-    3: 0.32,
-    4: 0.32,
+    0: 0.45,
+    1: 0.45,
+    2: 0.45,
+    3: 0.45,
+    4: 0.45,
     5: 0.30,
     6: 0.30,
     7: 0.30,
@@ -349,7 +349,7 @@ class FfmpegH264Writer:
             return False
 
     def _start(self):
-        for enc in ('h264_rkmpp', 'h264_v4l2m2m', 'h264_omx', 'libx264'):
+        for enc in ('libx264', 'h264_rkmpp', 'h264_v4l2m2m', 'h264_omx'):
             if self._try_start(enc):
                 return
         print(f'[per-id-video] no available H.264 encoder for {self.path}')
@@ -1026,10 +1026,10 @@ class PlateTextTracker:
         return results
 
 
-class VehicleTracker:
+class ByteTrackTracker:
     def __init__(self, iou_thresh=0.3, max_age=60, center_gate_ratio=0.0):
-        self.iou_thresh = iou_thresh
-        self.max_age = max_age
+        self.iou_thresh = float(iou_thresh)
+        self.max_age = int(max_age)
         self.center_gate_ratio = max(0.0, float(center_gate_ratio))
         self.tracks = {}
         self.next_id = 1
@@ -1046,13 +1046,12 @@ class VehicleTracker:
         det_boxes = [np.array(det['box'], dtype=float) for det in detections]
         assigned_tracks = {}
         assigned_dets = set()
-        iou_matrix = None
         if track_ids and det_boxes:
             iou_matrix = np.zeros((len(track_ids), len(det_boxes)), dtype=np.float32)
             for ti, tid in enumerate(track_ids):
-                tbox = self.tracks[tid]['box']
+                tbox = np.array(self.tracks[tid]['box'], dtype=float)
+                xb1, yb1, xb2, yb2 = tbox
                 for di, dbox in enumerate(det_boxes):
-                    xb1, yb1, xb2, yb2 = tbox
                     x1, y1, x2, y2 = dbox
                     xA = max(xb1, x1)
                     yA = max(yb1, y1)
@@ -1061,27 +1060,27 @@ class VehicleTracker:
                     interW = max(0.0, xB - xA)
                     interH = max(0.0, yB - yA)
                     inter = interW * interH
-                    if inter <= 0:
+                    if inter <= 0.0:
                         iou_matrix[ti, di] = 0.0
                     else:
-                        areaA = (xb2 - xb1) * (yb2 - yb1) + 1e-6
-                        areaB = (x2 - x1) * (y2 - y1) + 1e-6
+                        areaA = max(1.0, (xb2 - xb1) * (yb2 - yb1))
+                        areaB = max(1.0, (x2 - x1) * (y2 - y1))
                         iou_matrix[ti, di] = inter / (areaA + areaB - inter)
-        if iou_matrix is not None:
             while True:
                 ti, di = np.unravel_index(np.argmax(iou_matrix), iou_matrix.shape)
                 max_iou = iou_matrix[ti, di]
                 if max_iou < self.iou_thresh:
                     if self.center_gate_ratio <= 0.0:
                         break
-                    tbox = self.tracks[track_ids[ti]]['box']
+                    tid = track_ids[ti]
+                    tbox = np.array(self.tracks[tid]['box'], dtype=float)
                     dbox = det_boxes[di]
                     tcx = 0.5 * (tbox[0] + tbox[2])
                     tcy = 0.5 * (tbox[1] + tbox[3])
                     dcx = 0.5 * (dbox[0] + dbox[2])
                     dcy = 0.5 * (dbox[1] + dbox[3])
                     diag = ((tbox[2] - tbox[0]) ** 2 + (tbox[3] - tbox[1]) ** 2) ** 0.5
-                    if diag <= 0:
+                    if diag <= 0.0:
                         break
                     center_dist = ((tcx - dcx) ** 2 + (tcy - dcy) ** 2) ** 0.5
                     if center_dist > self.center_gate_ratio * diag:
@@ -1089,15 +1088,21 @@ class VehicleTracker:
                 tid = track_ids[ti]
                 assigned_tracks[tid] = di
                 assigned_dets.add(di)
-                iou_matrix[ti, :] = -1
-                iou_matrix[:, di] = -1
+                iou_matrix[ti, :] = -1.0
+                iou_matrix[:, di] = -1.0
+                if np.max(iou_matrix) <= 0.0:
+                    break
         for tid, det_idx in assigned_tracks.items():
             det = detections[det_idx]
-            self.tracks[tid]['box'] = det['box']
-            self.tracks[tid]['cls'] = det['cls']
-            self.tracks[tid]['score'] = det['score']
-            self.tracks[tid]['last_seen'] = frame_idx
-            self.tracks[tid]['age'] = 0
+            tr = self.tracks.get(tid)
+            if not tr:
+                continue
+            tr['box'] = det['box']
+            tr['cls'] = det['cls']
+            tr['score'] = float(det.get('score', 0.0))
+            tr['last_seen'] = frame_idx
+            tr['age'] = 0
+            tr['hits'] = tr.get('hits', 0) + 1
         for di, det in enumerate(detections):
             if di in assigned_dets:
                 continue
@@ -1106,27 +1111,32 @@ class VehicleTracker:
             self.tracks[tid] = {
                 'box': det['box'],
                 'cls': det['cls'],
-                'score': det['score'],
+                'score': float(det.get('score', 0.0)),
                 'last_seen': frame_idx,
                 'age': 0,
+                'hits': 1,
             }
             assigned_tracks[tid] = di
         to_delete = []
         for tid, track in self.tracks.items():
             if tid in assigned_tracks:
                 continue
-            track['age'] += 1
+            track['age'] = track.get('age', 0) + 1
             if track['age'] > self.max_age:
                 to_delete.append(tid)
         for tid in to_delete:
             self.tracks.pop(tid, None)
         assignments = [-1] * len(detections)
         for tid, det_idx in assigned_tracks.items():
-            assignments[det_idx] = tid
+            if 0 <= det_idx < len(assignments):
+                assignments[det_idx] = tid
         return assignments
 
     def get_active_tracks(self):
-        return {tid: tr for tid, tr in self.tracks.items() if tr['age'] == 0}
+        return {tid: tr for tid, tr in self.tracks.items() if tr.get('age', 0) == 0}
+
+
+VehicleTracker = ByteTrackTracker
 
 
 class EventUploader:
@@ -1220,6 +1230,8 @@ class EventManager:
         self.stationary_min_frames = int(config.get('stationary_min_frames', 0))
         self.stationary_speed_thresh = float(config.get('stationary_speed_thresh', 8.0))
         self.min_water_hit_frames_for_wash = int(self.logic.get('min_water_hit_frames_for_wash', 30))
+        self.water_window_size = int(self.logic.get('water_window_size', 20))
+        self.water_window_min_hits = int(self.logic.get('water_window_min_hits', 3))
         self.type34_min_interval = int(config.get('type34_min_interval_frames', 5))
         self.vehicle_shrink_ratio = float(config.get('vehicle_shrink_ratio', 0.35))
         self.vehicle_lock_min_votes = int(config.get('vehicle_lock_min_votes', 80))
@@ -1311,6 +1323,8 @@ class EventManager:
             'washing_confirmed': False,
             'water_detected': False,
             'water_hit_frames': 0,
+            'water_window': deque(maxlen=20),
+            'effective_wash_frames': 0,
             'last_frame_idx': frame_idx,
             'last_frame': None,
             'plate_text': '',
@@ -1459,6 +1473,13 @@ class EventManager:
             st['water_detected'] = False
             st['wash_duration'] = 0.0
             st['water_hit_frames'] = 0
+            win = st.get('water_window')
+            if isinstance(win, deque):
+                win.clear()
+            else:
+                win = deque(maxlen=self.water_window_size)
+            st['water_window'] = win
+            st['effective_wash_frames'] = 0
         enter_frame = st.get('zone_b_enter_frame', -1)
         anchor_elapsed = 0
         if inside_b:
@@ -1474,12 +1495,28 @@ class EventManager:
             st['zone_b_enter_frame'] = -1
         meets_anchor_delay = (not inside_b) or (anchor_elapsed >= self.zone_b_anchor_min_frames)
         candidate_active = bool(inside_b and meets_anchor_delay)
+        event_enabled = bool(
+            st.get('zone_a_dwell_frames', 0) > 0
+            or inside_a
+            or zone_flags.get('enter_a')
+            or zone_flags.get('exit_a')
+        )
         if not candidate_active:
             st['washing_candidate'] = False
         else:
             st['washing_candidate'] = True
-        if inside_b and water_boxes:
-            st['water_hit_frames'] = st.get('water_hit_frames', 0) + 1
+        hit = 1 if inside_b and water_boxes else 0
+        if inside_b:
+            st['water_hit_frames'] = st.get('water_hit_frames', 0) + hit
+            win = st.get('water_window')
+            if not isinstance(win, deque):
+                win = deque(maxlen=self.water_window_size)
+            if win.maxlen != self.water_window_size:
+                win = deque(win, maxlen=self.water_window_size)
+            win.append(hit)
+            st['water_window'] = win
+            if sum(win) >= self.water_window_min_hits:
+                st['effective_wash_frames'] = st.get('effective_wash_frames', 0) + 1
         water_ready = st.get('water_hit_frames', 0) >= self.min_water_hit_frames_for_wash
         stationary_ready = (self.stationary_min_frames > 0 and
                             st['stationary_frames'] >= self.stationary_min_frames)
@@ -1507,7 +1544,7 @@ class EventManager:
         if bool(zone_state and zone_state.inside_a) and 1 not in st['events'] and 1 in self.allowed_events and can_type1:
             self.emit_event(track_id, 1, frame_idx, frame, {'captureTime': timestamp}, st)
             st['events'].add(1)
-        if zone_flags.get('enter_b') and 2 not in st['events'] and 2 in self.allowed_events:
+        if event_enabled and zone_flags.get('enter_b') and 2 not in st['events'] and 2 in self.allowed_events:
             if 1 in self.allowed_events and 1 not in st['events']:
                 backfill_type1 = True
                 if self.min_type1_track_frames > 0:
@@ -1518,7 +1555,7 @@ class EventManager:
                     st['events'].add(1)
             self.emit_event(track_id, 2, frame_idx, frame, {'captureTime': timestamp}, st)
             st['events'].add(2)
-        if just_confirmed and 3 in self.allowed_events \
+        if event_enabled and just_confirmed and 3 in self.allowed_events \
                 and self._type_event_interval_ok(st, 3, frame_idx):
             self.emit_event(track_id, 3, frame_idx, frame, {
                 'captureTime': timestamp,
@@ -1531,7 +1568,7 @@ class EventManager:
         if zone_flags.get('exit_b'):
             if st.get('zone_b_dwell_frames', 0) >= self.min_type4_zone_b_dwell:
                 can_type4 = True
-        if can_type4 and 4 in self.allowed_events and self._type_event_interval_ok(st, 4, frame_idx):
+        if event_enabled and can_type4 and 4 in self.allowed_events and self._type_event_interval_ok(st, 4, frame_idx):
             st['wash_end_time'] = st.get('wash_end_time') or timestamp
             duration_val = self._compute_effective_wash_duration(st, frame_idx)
             st['wash_duration'] = duration_val
@@ -1647,7 +1684,8 @@ class EventManager:
             if tid in active_ids:
                 continue
             if frame_idx - st.get('last_frame_idx', frame_idx) >= self.timeout_frames:
-                if 4 not in st['events'] and 4 in self.allowed_events and st.get('water_detected') and st.get('zone_b_dwell_frames', 0) > 0:
+                event_enabled = bool(st.get('zone_a_dwell_frames', 0) > 0)
+                if 4 not in st['events'] and 4 in self.allowed_events and event_enabled and st.get('water_detected') and st.get('zone_b_dwell_frames', 0) > 0:
                     last_frame = st.get('last_frame_idx', frame_idx)
                     if self._type_event_interval_ok(st, 4, last_frame):
                         st['wash_end_time'] = st.get('wash_end_time') or self.frame_timestamp(last_frame)
@@ -1662,7 +1700,7 @@ class EventManager:
                 if self.min_type5_zone_a_dwell > 0:
                     if st.get('zone_a_dwell_frames', 0) < self.min_type5_zone_a_dwell:
                         can_type5 = False
-                if 5 not in st['events'] and 5 in self.allowed_events and can_type5:
+                if 5 not in st['events'] and 5 in self.allowed_events and can_type5 and event_enabled:
                     timestamp = self.frame_timestamp(st.get('last_frame_idx', frame_idx))
                     st['wash_end_time'] = st.get('wash_end_time') or timestamp
                     duration_val = self._compute_effective_wash_duration(st, st.get('last_frame_idx', frame_idx))
@@ -2029,14 +2067,11 @@ class EventManager:
         hits = track_state.get('water_hit_frames', 0)
         if hits < self.min_water_hit_frames_for_wash:
             return 0.0
-        end_frame = frame_idx
-        start_frame = track_state.get('last_type3_frame', -1)
-        if start_frame is None or start_frame < 0 or end_frame < start_frame:
-            dwell_frames = track_state.get('zone_b_dwell_frames', 0)
-        else:
-            dwell_frames = end_frame - start_frame
-        dwell_seconds = dwell_frames / max(self.fps, 1e-6)
-        return max(0.0, dwell_seconds)
+        frames = track_state.get('effective_wash_frames', 0)
+        if frames <= 0:
+            return 0.0
+        seconds = frames / max(self.fps, 1e-6)
+        return max(0.0, seconds)
 
     def _avg(self, values):
         if not values:
