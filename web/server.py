@@ -63,9 +63,19 @@ app.add_middleware(
 @app.on_event("startup")
 def _startup_manager():
     try:
+        for cfg_name in ("config_washing.json", "config_detour.json"):
+            cfg_path = ROOT / cfg_name
+            if not cfg_path.exists():
+                continue
+            try:
+                mgr = _get_inference_manager_for_key(cfg_name)
+                mgr.start()
+                print(f"[server] startup: auto-started {cfg_name}")
+            except Exception as exc:
+                print(f"[server] startup: failed to auto-start {cfg_name}: {exc}")
         _get_default_inference_manager()
     except Exception as exc:
-        print(f"[server] startup: failed to init default inference manager: {exc}")
+        print(f"[server] startup: failed to init inference managers: {exc}")
 
 
 @app.on_event("shutdown")
