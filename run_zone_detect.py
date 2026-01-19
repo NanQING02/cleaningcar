@@ -26,11 +26,6 @@ import numpy as np
 from rknnlite.api import RKNNLite
 
 RGA_RESIZE_FUNC = None
-try:
-    from rga_resize_plugin import rga_resize
-    RGA_RESIZE_FUNC = rga_resize
-except Exception:
-    RGA_RESIZE_FUNC = None
 
 try:
     import yaml
@@ -1030,120 +1025,386 @@ class PlateTextTracker:
         return results
 
 
+class _KalmanFilterXYAH:
+    def __init__(self):
+        self._motion_mat = np.eye(8, dtype=np.float32)
+        for i in range(4):
+            self._motion_mat[i, i + 4] = 1.0
+        self._update_mat = np.eye(4, 8, dtype=np.float32)
+        self._std_weight_position = 1.0 / 20.0
+        self._std_weight_velocity = 1.0 / 160.0
+
+    def initiate(self, measurement):
+        mean_pos = measurement
+        mean_vel = np.zeros_like(mean_pos)
+        mean = np.r_[mean_pos, mean_vel].astype(np.float32)
+        std = [
+            2.0 * self._std_weight_position * measurement[3],
+            2.0 * self._std_weight_position * measurement[3],
+            1e-2,
+            2.0 * self._std_weight_position * measurement[3],
+            10.0 * self._std_weight_velocity * measurement[3],
+            10.0 * self._std_weight_velocity * measurement[3],
+            1e-5,
+            10.0 * self._std_weight_velocity * measurement[3],
+        ]
+        covariance = np.diag(np.square(std)).astype(np.float32)
+        return mean, covariance
+
+    def predict(self, mean, covariance):
+        std_pos = [
+            self._std_weight_position * mean[3],
+            self._std_weight_position * mean[3],
+            1e-2,
+            self._std_weight_position * mean[3],
+        ]
+        std_vel = [
+            self._std_weight_velocity * mean[3],
+            self._std_weight_velocity * mean[3],
+            1e-5,
+            self._std_weight_velocity * mean[3],
+        ]
+        motion_cov = np.diag(np.square(np.r_[std_pos, std_vel])).astype(np.float32)
+        mean = np.dot(self._motion_mat, mean)
+        covariance = np.linalg.multi_dot((self._motion_mat, covariance, self._motion_mat.T)) + motion_cov
+        return mean, covariance
+
+    def project(self, mean, covariance):
+        std = [
+            self._std_weight_position * mean[3],
+            self._std_weight_position * mean[3],
+            1e-1,
+            self._std_weight_position * mean[3],
+        ]
+        innovation_cov = np.diag(np.square(std)).astype(np.float32)
+        mean = np.dot(self._update_mat, mean)
+        covariance = np.linalg.multi_dot((self._update_mat, covariance, self._update_mat.T)) + innovation_cov
+        return mean, covariance
+
+    def update(self, mean, covariance, measurement):
+        projected_mean, projected_cov = self.project(mean, covariance)
+        kalman_gain = np.dot(np.dot(covariance, self._update_mat.T), np.linalg.inv(projected_cov))
+        innovation = measurement - projected_mean
+        new_mean = mean + np.dot(kalman_gain, innovation)
+        new_covariance = covariance - np.linalg.multi_dot((kalman_gain, projected_cov, kalman_gain.T))
+        return new_mean.astype(np.float32), new_covariance.astype(np.float32)
+
+
+def _tlbr_to_tlwh(tlbr):
+    x1, y1, x2, y2 = tlbr
+    return np.array([x1, y1, x2 - x1, y2 - y1], dtype=np.float32)
+
+
+def _tlwh_to_tlbr(tlwh):
+    x, y, w, h = tlwh
+    return np.array([x, y, x + w, y + h], dtype=np.float32)
+
+
+def _tlwh_to_xyah(tlwh):
+    x, y, w, h = tlwh
+    cx = x + w / 2.0
+    cy = y + h / 2.0
+    a = w / max(h, 1e-6)
+    return np.array([cx, cy, a, h], dtype=np.float32)
+
+
+def _xyah_to_tlwh(xyah):
+    cx, cy, a, h = xyah
+    w = a * h
+    x = cx - w / 2.0
+    y = cy - h / 2.0
+    return np.array([x, y, w, h], dtype=np.float32)
+
+
+def _iou_cost_matrix(tracks_tlbr, dets_tlbr):
+    if len(tracks_tlbr) == 0 or len(dets_tlbr) == 0:
+        return np.zeros((len(tracks_tlbr), len(dets_tlbr)), dtype=np.float32)
+    tracks = np.asarray(tracks_tlbr, dtype=np.float32)
+    dets = np.asarray(dets_tlbr, dtype=np.float32)
+    iou = np.zeros((tracks.shape[0], dets.shape[0]), dtype=np.float32)
+    for i in range(tracks.shape[0]):
+        x1, y1, x2, y2 = tracks[i]
+        area1 = max(1.0, float((x2 - x1) * (y2 - y1)))
+        for j in range(dets.shape[0]):
+            xx1, yy1, xx2, yy2 = dets[j]
+            area2 = max(1.0, float((xx2 - xx1) * (yy2 - yy1)))
+            ix1 = max(x1, xx1)
+            iy1 = max(y1, yy1)
+            ix2 = min(x2, xx2)
+            iy2 = min(y2, yy2)
+            iw = max(0.0, ix2 - ix1)
+            ih = max(0.0, iy2 - iy1)
+            inter = iw * ih
+            if inter <= 0.0:
+                iou[i, j] = 0.0
+            else:
+                iou[i, j] = float(inter) / float(area1 + area2 - inter)
+    return 1.0 - iou
+
+
+def _linear_assignment(cost_matrix, cost_limit):
+    if cost_matrix.size == 0:
+        return [], list(range(cost_matrix.shape[0])), list(range(cost_matrix.shape[1]))
+    cost = np.asarray(cost_matrix, dtype=np.float32)
+    n_rows, n_cols = cost.shape
+    transposed = False
+    if n_rows > n_cols:
+        cost = cost.T
+        n_rows, n_cols = cost.shape
+        transposed = True
+    u = np.zeros(n_rows + 1, dtype=np.float32)
+    v = np.zeros(n_cols + 1, dtype=np.float32)
+    p = np.zeros(n_cols + 1, dtype=np.int32)
+    way = np.zeros(n_cols + 1, dtype=np.int32)
+    for i in range(1, n_rows + 1):
+        p[0] = i
+        j0 = 0
+        minv = np.full(n_cols + 1, np.inf, dtype=np.float32)
+        used = np.zeros(n_cols + 1, dtype=np.bool_)
+        while True:
+            used[j0] = True
+            i0 = p[j0]
+            delta = np.inf
+            j1 = 0
+            for j in range(1, n_cols + 1):
+                if used[j]:
+                    continue
+                cur = cost[i0 - 1, j - 1] - u[i0] - v[j]
+                if cur < minv[j]:
+                    minv[j] = cur
+                    way[j] = j0
+                if minv[j] < delta:
+                    delta = minv[j]
+                    j1 = j
+            for j in range(0, n_cols + 1):
+                if used[j]:
+                    u[p[j]] += delta
+                    v[j] -= delta
+                else:
+                    minv[j] -= delta
+            j0 = j1
+            if p[j0] == 0:
+                break
+        while True:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+            if j0 == 0:
+                break
+    match_col = np.full(n_rows + 1, -1, dtype=np.int32)
+    for j in range(1, n_cols + 1):
+        if p[j] != 0:
+            match_col[p[j]] = j
+    matches = []
+    for i in range(1, n_rows + 1):
+        j = match_col[i]
+        if j <= 0:
+            continue
+        c = cost[i - 1, j - 1]
+        if c <= cost_limit:
+            if transposed:
+                matches.append((j - 1, i - 1))
+            else:
+                matches.append((i - 1, j - 1))
+    if transposed:
+        row_assigned = {j for j, _ in matches}
+        col_assigned = {i for _, i in matches}
+        unmatched_rows = [i for i in range(cost_matrix.shape[0]) if i not in row_assigned]
+        unmatched_cols = [j for j in range(cost_matrix.shape[1]) if j not in col_assigned]
+    else:
+        row_assigned = {i for i, _ in matches}
+        col_assigned = {j for _, j in matches}
+        unmatched_rows = [i for i in range(cost_matrix.shape[0]) if i not in row_assigned]
+        unmatched_cols = [j for j in range(cost_matrix.shape[1]) if j not in col_assigned]
+    return matches, unmatched_rows, unmatched_cols
+
+
+class _STrack:
+    Tracked = 1
+    Lost = 2
+    Removed = 3
+
+    def __init__(self, tlbr, score, cls_id):
+        self.tlwh = _tlbr_to_tlwh(tlbr)
+        self.score = float(score)
+        self.cls_id = int(cls_id)
+        self.track_id = -1
+        self.state = _STrack.Tracked
+        self.is_activated = False
+        self.frame_id = 0
+        self.start_frame = 0
+        self.time_since_update = 0
+        self.mean = None
+        self.covariance = None
+
+    def activate(self, kf, frame_id, track_id):
+        self.track_id = int(track_id)
+        self.mean, self.covariance = kf.initiate(_tlwh_to_xyah(self.tlwh))
+        self.frame_id = int(frame_id)
+        self.start_frame = int(frame_id)
+        self.time_since_update = 0
+        self.state = _STrack.Tracked
+        self.is_activated = True
+
+    def predict(self, kf):
+        if self.mean is None or self.covariance is None:
+            return
+        self.mean, self.covariance = kf.predict(self.mean, self.covariance)
+        self.tlwh = _xyah_to_tlwh(self.mean[:4])
+        self.time_since_update += 1
+
+    def update(self, kf, tlbr, score, cls_id, frame_id):
+        self.tlwh = _tlbr_to_tlwh(tlbr)
+        if self.mean is not None and self.covariance is not None:
+            self.mean, self.covariance = kf.update(self.mean, self.covariance, _tlwh_to_xyah(self.tlwh))
+            self.tlwh = _xyah_to_tlwh(self.mean[:4])
+        self.score = float(score)
+        self.cls_id = int(cls_id)
+        self.frame_id = int(frame_id)
+        self.time_since_update = 0
+        self.state = _STrack.Tracked
+        self.is_activated = True
+
+    def mark_lost(self):
+        self.state = _STrack.Lost
+
+    def mark_removed(self):
+        self.state = _STrack.Removed
+
+    def tlbr(self):
+        return _tlwh_to_tlbr(self.tlwh)
+
+
 class ByteTrackTracker:
-    def __init__(self, iou_thresh=0.3, max_age=60, center_gate_ratio=0.0):
-        self.iou_thresh = float(iou_thresh)
-        self.max_age = int(max_age)
-        self.center_gate_ratio = max(0.0, float(center_gate_ratio))
-        self.tracks = {}
+    def __init__(self, track_thresh=0.5, low_thresh=0.1, match_thresh=0.3, track_buffer=60):
+        self.track_thresh = float(track_thresh)
+        self.low_thresh = float(low_thresh)
+        self.match_thresh = float(match_thresh)
+        self.track_buffer = int(track_buffer)
+        self.kf = _KalmanFilterXYAH()
+        self.tracked = []
+        self.lost = []
+        self.removed = []
+        self.frame_id = 0
         self.next_id = 1
 
+    def _new_id(self):
+        tid = self.next_id
+        self.next_id += 1
+        return tid
+
     def update(self, frame_idx, detections):
-        to_prune = []
-        for tid, tr in self.tracks.items():
-            last_seen = tr.get('last_seen', frame_idx)
-            if frame_idx - last_seen > self.max_age:
-                to_prune.append(tid)
-        for tid in to_prune:
-            self.tracks.pop(tid, None)
-        track_ids = list(self.tracks.keys())
-        det_boxes = [np.array(det['box'], dtype=float) for det in detections]
-        assigned_tracks = {}
-        assigned_dets = set()
-        if track_ids and det_boxes:
-            iou_matrix = np.zeros((len(track_ids), len(det_boxes)), dtype=np.float32)
-            for ti, tid in enumerate(track_ids):
-                tbox = np.array(self.tracks[tid]['box'], dtype=float)
-                xb1, yb1, xb2, yb2 = tbox
-                for di, dbox in enumerate(det_boxes):
-                    x1, y1, x2, y2 = dbox
-                    xA = max(xb1, x1)
-                    yA = max(yb1, y1)
-                    xB = min(xb2, x2)
-                    yB = min(yb2, y2)
-                    interW = max(0.0, xB - xA)
-                    interH = max(0.0, yB - yA)
-                    inter = interW * interH
-                    if inter <= 0.0:
-                        iou_matrix[ti, di] = 0.0
-                    else:
-                        areaA = max(1.0, (xb2 - xb1) * (yb2 - yb1))
-                        areaB = max(1.0, (x2 - x1) * (y2 - y1))
-                        iou_matrix[ti, di] = inter / (areaA + areaB - inter)
-            while True:
-                ti, di = np.unravel_index(np.argmax(iou_matrix), iou_matrix.shape)
-                max_iou = iou_matrix[ti, di]
-                if max_iou < self.iou_thresh:
-                    if self.center_gate_ratio <= 0.0:
-                        break
-                    tid = track_ids[ti]
-                    tbox = np.array(self.tracks[tid]['box'], dtype=float)
-                    dbox = det_boxes[di]
-                    tcx = 0.5 * (tbox[0] + tbox[2])
-                    tcy = 0.5 * (tbox[1] + tbox[3])
-                    dcx = 0.5 * (dbox[0] + dbox[2])
-                    dcy = 0.5 * (dbox[1] + dbox[3])
-                    diag = ((tbox[2] - tbox[0]) ** 2 + (tbox[3] - tbox[1]) ** 2) ** 0.5
-                    if diag <= 0.0:
-                        iou_matrix[ti, di] = -1.0
-                        if np.max(iou_matrix) <= 0.0:
-                            break
-                        continue
-                    center_dist = ((tcx - dcx) ** 2 + (tcy - dcy) ** 2) ** 0.5
-                    if center_dist > self.center_gate_ratio * diag:
-                        iou_matrix[ti, di] = -1.0
-                        if np.max(iou_matrix) <= 0.0:
-                            break
-                        continue
-                tid = track_ids[ti]
-                assigned_tracks[tid] = di
-                assigned_dets.add(di)
-                iou_matrix[ti, :] = -1.0
-                iou_matrix[:, di] = -1.0
-                if np.max(iou_matrix) <= 0.0:
-                    break
-        for tid, det_idx in assigned_tracks.items():
-            det = detections[det_idx]
-            tr = self.tracks.get(tid)
-            if not tr:
+        self.frame_id = int(frame_idx)
+        dets = []
+        for det in detections:
+            tlbr = np.array(det['box'], dtype=np.float32)
+            score = float(det.get('score', 0.0))
+            cls_id = int(det.get('cls', -1))
+            if score < self.low_thresh:
                 continue
-            tr['box'] = det['box']
-            tr['cls'] = det['cls']
-            tr['score'] = float(det.get('score', 0.0))
-            tr['last_seen'] = frame_idx
-            tr['age'] = 0
-            tr['hits'] = tr.get('hits', 0) + 1
-        for di, det in enumerate(detections):
-            if di in assigned_dets:
+            dets.append((tlbr, score, cls_id))
+        high = [d for d in dets if d[1] >= self.track_thresh]
+        low = [d for d in dets if self.low_thresh <= d[1] < self.track_thresh]
+
+        for t in self.tracked:
+            t.predict(self.kf)
+        for t in self.lost:
+            t.predict(self.kf)
+
+        strack_pool = [t for t in self.tracked if t.state == _STrack.Tracked] + [t for t in self.lost if t.state == _STrack.Lost]
+
+        matches = []
+        unmatched_tracks = list(range(len(strack_pool)))
+        unmatched_high = list(range(len(high)))
+        if strack_pool and high:
+            track_boxes = [t.tlbr() for t in strack_pool]
+            det_boxes = [d[0] for d in high]
+            cost = _iou_cost_matrix(track_boxes, det_boxes)
+            matches, unmatched_tracks, unmatched_high = _linear_assignment(cost, 1.0 - self.match_thresh)
+
+        activated = []
+        refind = []
+        for ti, di in matches:
+            trk = strack_pool[ti]
+            tlbr, score, cls_id = high[di]
+            trk.update(self.kf, tlbr, score, cls_id, self.frame_id)
+            if trk in self.lost:
+                self.lost.remove(trk)
+                refind.append(trk)
+            else:
+                activated.append(trk)
+
+        remaining_tracked = [strack_pool[i] for i in unmatched_tracks]
+        low_matches = []
+        unmatched_low = list(range(len(low)))
+        if remaining_tracked and low:
+            track_boxes = [t.tlbr() for t in remaining_tracked]
+            det_boxes = [d[0] for d in low]
+            cost = _iou_cost_matrix(track_boxes, det_boxes)
+            low_matches, u_trk2, unmatched_low = _linear_assignment(cost, 1.0 - self.match_thresh)
+            still_unmatched = []
+            for idx in u_trk2:
+                still_unmatched.append(remaining_tracked[idx])
+            remaining_tracked = still_unmatched
+        for ti, di in low_matches:
+            trk = remaining_tracked[ti]
+            tlbr, score, cls_id = low[di]
+            trk.update(self.kf, tlbr, score, cls_id, self.frame_id)
+            if trk in self.lost:
+                self.lost.remove(trk)
+                refind.append(trk)
+            else:
+                activated.append(trk)
+
+        for trk in remaining_tracked:
+            if trk.state != _STrack.Tracked:
                 continue
-            tid = self.next_id
-            self.next_id += 1
-            self.tracks[tid] = {
-                'box': det['box'],
-                'cls': det['cls'],
-                'score': float(det.get('score', 0.0)),
-                'last_seen': frame_idx,
-                'age': 0,
-                'hits': 1,
-            }
-            assigned_tracks[tid] = di
-        to_delete = []
-        for tid, track in self.tracks.items():
-            if tid in assigned_tracks:
-                continue
-            track['age'] = track.get('age', 0) + 1
-            if track['age'] > self.max_age:
-                to_delete.append(tid)
-        for tid in to_delete:
-            self.tracks.pop(tid, None)
+            trk.mark_lost()
+            self.lost.append(trk)
+
+        new_tracks = []
+        for di in unmatched_high:
+            tlbr, score, cls_id = high[di]
+            trk = _STrack(tlbr, score, cls_id)
+            trk.activate(self.kf, self.frame_id, self._new_id())
+            new_tracks.append(trk)
+
+        self.tracked = [t for t in self.tracked if t.state == _STrack.Tracked]
+        self.tracked.extend([t for t in activated if t not in self.tracked])
+        self.tracked.extend([t for t in refind if t not in self.tracked])
+        self.tracked.extend(new_tracks)
+
+        kept_lost = []
+        for t in self.lost:
+            if (self.frame_id - t.frame_id) <= self.track_buffer:
+                kept_lost.append(t)
+            else:
+                t.mark_removed()
+                self.removed.append(t)
+        self.lost = kept_lost
+
         assignments = [-1] * len(detections)
-        for tid, det_idx in assigned_tracks.items():
-            if 0 <= det_idx < len(assignments):
-                assignments[det_idx] = tid
+        det_to_tid = {}
+        for idx, det in enumerate(detections):
+            score = float(det.get('score', 0.0))
+            if score < self.low_thresh:
+                continue
+            tlbr = np.array(det['box'], dtype=np.float32)
+            det_to_tid[idx] = None
+        if detections:
+            active_tracks = {t.track_id: t for t in self.tracked if t.state == _STrack.Tracked and t.is_activated}
+            if active_tracks:
+                t_ids = list(active_tracks.keys())
+                t_boxes = [active_tracks[tid].tlbr() for tid in t_ids]
+                d_boxes = [np.array(det['box'], dtype=np.float32) for det in detections]
+                cost = _iou_cost_matrix(t_boxes, d_boxes)
+                m, _, _ = _linear_assignment(cost, 1.0 - self.match_thresh)
+                for ti, di in m:
+                    assignments[di] = t_ids[ti]
         return assignments
 
     def get_active_tracks(self):
-        return {tid: tr for tid, tr in self.tracks.items() if tr.get('age', 0) == 0}
+        return {t.track_id: {'box': [int(x) for x in t.tlbr().tolist()], 'cls': t.cls_id, 'score': t.score} for t in self.tracked if t.state == _STrack.Tracked}
 
 
 VehicleTracker = ByteTrackTracker
@@ -1274,9 +1535,17 @@ class EventManager:
         self.min_type5_zone_a_dwell = int(self.logic.get('min_zone_a_dwell_frames_for_type5', 0))
         if self.min_type5_zone_a_dwell < 0:
             self.min_type5_zone_a_dwell = 0
+
         self.min_type1_track_frames = int(self.logic.get('min_track_frames_for_type1', 10))
         if self.min_type1_track_frames < 10:
             self.min_type1_track_frames = 10
+
+        self.min_type2_track_frames = int(self.logic.get('min_track_frames_for_type2', 6))
+        if self.min_type2_track_frames < 1:
+            self.min_type2_track_frames = 1
+        self.min_type2_vehicle_votes = int(self.logic.get('min_vehicle_votes_for_type2', 3))
+        if self.min_type2_vehicle_votes < 0:
+            self.min_type2_vehicle_votes = 0
         self.wash_dwell_offset = 0.0
         self.min_type4_zone_b_dwell = int(self.logic.get('min_zone_b_dwell_frames_for_type4', 60))
         if self.min_type4_zone_b_dwell < 0:
@@ -1557,16 +1826,32 @@ class EventManager:
             self.emit_event(track_id, 1, frame_idx, frame, {'captureTime': timestamp}, st)
             st['events'].add(1)
         if event_enabled and zone_flags.get('enter_b') and 2 not in st['events'] and 2 in self.allowed_events:
-            if 1 in self.allowed_events and 1 not in st['events']:
-                backfill_type1 = True
-                if self.min_type1_track_frames > 0:
-                    if st.get('zone_a_dwell_frames', 0) < self.min_type1_track_frames:
-                        backfill_type1 = False
-                if backfill_type1:
-                    self.emit_event(track_id, 1, frame_idx, frame, {'captureTime': timestamp}, st)
-                    st['events'].add(1)
-            self.emit_event(track_id, 2, frame_idx, frame, {'captureTime': timestamp}, st)
-            st['events'].add(2)
+            can_type2 = True
+            if self.min_type2_track_frames > 0:
+                if st.get('track_frame_count', 0) < self.min_type2_track_frames:
+                    can_type2 = False
+            if self.min_type2_vehicle_votes > 0:
+                counts = st.get('class_counts') or {}
+                top_votes = 0
+                if counts:
+                    try:
+                        top_votes = max(int(v) for v in counts.values())
+                    except Exception:
+                        top_votes = 0
+                if top_votes < self.min_type2_vehicle_votes:
+                    can_type2 = False
+
+            if can_type2:
+                if 1 in self.allowed_events and 1 not in st['events']:
+                    backfill_type1 = True
+                    if self.min_type1_track_frames > 0:
+                        if st.get('zone_a_dwell_frames', 0) < self.min_type1_track_frames:
+                            backfill_type1 = False
+                    if backfill_type1:
+                        self.emit_event(track_id, 1, frame_idx, frame, {'captureTime': timestamp}, st)
+                        st['events'].add(1)
+                self.emit_event(track_id, 2, frame_idx, frame, {'captureTime': timestamp}, st)
+                st['events'].add(2)
         if event_enabled and just_confirmed and 3 in self.allowed_events:
             self.emit_event(track_id, 3, frame_idx, frame, {
                 'captureTime': timestamp,
@@ -1802,11 +2087,15 @@ class EventManager:
             device_name = self.config.get('system', {}).get('device_id') or self.camera_id
             session_id = f"{device_name}-{ts_str}-{track_id}"
             track_state['session_id'] = session_id
-        if event_type == 1:
+        # Start per-id recording when the track becomes meaningful (type2).
+        # We'll prebuffer a short window so the clip includes a bit of context.
+        if event_type == 2:
             prev_start = track_state.get('record_start_frame')
-            if prev_start is None or frame_idx < prev_start:
-                track_state['record_start_frame'] = frame_idx
-        if track_state.get('record_start_frame') is None:
+            prebuffer = int(max(0, int(self.logic.get('per_id_prebuffer_frames', int(max(self.fps, 1.0) * 2.0)))))
+            start_frame = max(0, frame_idx - prebuffer)
+            if prev_start is None or start_frame < prev_start:
+                track_state['record_start_frame'] = start_frame
+        if track_state.get('record_start_frame') is None and track_state.get('record_stop_frame') is not None:
             track_state['record_start_frame'] = frame_idx
         if event_type == 5:
             extra_frames = int(max(self.fps, 1.0) * 5.0)
@@ -2570,18 +2859,20 @@ def process_video(path, args):
         lock_frames=plate_lock_frames,
         max_age=max(int(config.get('track_timeout_frames', 60)) * 2, plate_lock_frames * 6)
     )
-    vehicle_iou_thresh = float(config.get('vehicle_iou_threshold', 0.3))
-    if vehicle_iou_thresh < 0.0:
-        vehicle_iou_thresh = 0.0
-    elif vehicle_iou_thresh > 1.0:
-        vehicle_iou_thresh = 1.0
-    vehicle_center_gate_ratio = float(config.get('vehicle_center_gate_ratio', 0.0) or 0.0)
-    if vehicle_center_gate_ratio < 0.0:
-        vehicle_center_gate_ratio = 0.0
+    # ByteTrack thresholds (keep legacy config keys for backwards compatibility)
+    bt_track_thresh = float(config.get('bt_track_thresh', float(config.get('vehicle_track_thresh', 0.45))))
+    bt_low_thresh = float(config.get('bt_low_thresh', float(config.get('vehicle_low_thresh', 0.10))))
+    bt_match_thresh = float(config.get('bt_match_thresh', float(config.get('vehicle_iou_threshold', 0.30))))
+    if bt_match_thresh < 0.0:
+        bt_match_thresh = 0.0
+    elif bt_match_thresh > 1.0:
+        bt_match_thresh = 1.0
+    bt_buffer = int(config.get('track_max_age', 60))
     vehicle_tracker = VehicleTracker(
-        iou_thresh=vehicle_iou_thresh,
-        max_age=int(config.get('track_max_age', 60)),
-        center_gate_ratio=vehicle_center_gate_ratio,
+        track_thresh=bt_track_thresh,
+        low_thresh=bt_low_thresh,
+        match_thresh=bt_match_thresh,
+        track_buffer=bt_buffer,
     )
     default_event_log = os.path.join(config.get('event_output_dir', './events'), 'event_log.csv')
     event_log_arg = getattr(args, 'event_log', None)
@@ -3078,8 +3369,10 @@ def process_video(path, args):
                             continue
                         if next_frame_to_write < start_f:
                             continue
-                        # Premature close removed to prevent video fragmentation. 
-                        # We rely on flush_inactive to close the writer when the track is gone.
+                        # Only create the per-id video file after type2 (meaningful record) has been emitted.
+                        # This avoids generating lots of short clips for spurious IDs.
+                        if 2 not in (st.get('events') or set()):
+                            continue
                         writer = per_id_writers.get(tid)
                         if writer is None:
                             st_capture_time = st.get('type1_capture_time')
