@@ -16,7 +16,7 @@ from pathlib import Path
 from queue import Queue
 
 from config_manager import ConfigManager, ConfigError
-from zone_manager import ZoneManager, polygon_mask
+from zone_manager import ZoneManager, polygon_mask, point_in_polygon
 from utils.disk_manager import DiskCleaner
 from utils.perf_monitor import PerformanceMonitor
 from utils.upload_queue import SQLiteUploadQueue
@@ -82,15 +82,15 @@ CLASS_ALIAS_TO_ID = {name.lower(): idx for idx, name in enumerate(CLASS_NAMES)}
 VEHICLE_CLASS_IDS = {0, 1, 2, 3, 4}
 WATER_CLASS_IDS = {6, 7}
 CLASS_THRESH = {
-    0: 0.45,
-    1: 0.45,
-    2: 0.45,
-    3: 0.45,
-    4: 0.45,
-    5: 0.30,
-    6: 0.30,
-    7: 0.30,
-    8: 0.30,
+    0: 0.40,
+    1: 0.40,
+    2: 0.40,
+    3: 0.40,
+    4: 0.40,
+    5: 0.50,
+    6: 0.50,
+    7: 0.50,
+    8: 0.50,
 }
 PLATE_CAR_LINK_IOU = 0.02
 CAR_PLATE_CACHE_TTL = 60
@@ -218,6 +218,8 @@ def apply_cli_overrides(args, config):
     logic = (config or {}).get('logic', {})
     maybe_set('plate_lock_frames', logic.get('plate_lock_frames'))
     maybe_set('no_draw', logic.get('no_draw'))
+    maybe_set('is_detour', logic.get('is_detour'))
+    maybe_set('lpr_core_mask', logic.get('lpr_core_mask'))
 
 
 def apply_class_thresholds_from_config(config):
@@ -300,14 +302,14 @@ class FfmpegH264Writer:
             opts = [
                 '-c:v',
                 'libx264',
-                '-profile:v',
-                'baseline',
-                '-level',
-                '3.1',
                 '-preset',
-                'veryfast',
+                'ultrafast',
+                '-tune',
+                'zerolatency',
                 '-crf',
                 '28',
+                '-threads',
+                '2',
                 '-pix_fmt',
                 'yuv420p',
             ]
@@ -450,6 +452,8 @@ def parse_args():
                     help='事件截图在上报时的字段格式：文件路径或Base64。')
     ap.add_argument('--lane', help='覆盖事件上报中的 lane 字段。')
     ap.add_argument('--detect_roi_only', action='store_true', help='仅在配置的 detect_roi 多边形内进行检测。')
+    ap.add_argument('--lpr_core_mask', default=None, help="LPRNet NPU核心掩码 (e.g. '4' for Core 2)")
+    ap.add_argument('--is_detour', action='store_true', help='标记为绕行道模式，屏蔽冲洗逻辑')
     defaults = ap.parse_args(args=[])
     args = ap.parse_args()
     setattr(args, '_defaults', defaults)
@@ -1081,10 +1085,16 @@ class ByteTrackTracker:
                     dcy = 0.5 * (dbox[1] + dbox[3])
                     diag = ((tbox[2] - tbox[0]) ** 2 + (tbox[3] - tbox[1]) ** 2) ** 0.5
                     if diag <= 0.0:
-                        break
+                        iou_matrix[ti, di] = -1.0
+                        if np.max(iou_matrix) <= 0.0:
+                            break
+                        continue
                     center_dist = ((tcx - dcx) ** 2 + (tcy - dcy) ** 2) ** 0.5
                     if center_dist > self.center_gate_ratio * diag:
-                        break
+                        iou_matrix[ti, di] = -1.0
+                        if np.max(iou_matrix) <= 0.0:
+                            break
+                        continue
                 tid = track_ids[ti]
                 assigned_tracks[tid] = di
                 assigned_dets.add(di)
@@ -1213,8 +1223,9 @@ class EventUploader:
 
 
 class EventManager:
-    def __init__(self, config, fps, frame_size, zone_manager, event_log_path=None, uploader=None, capture_mode='path'):
+    def __init__(self, config, fps, frame_size, zone_manager, event_log_path=None, uploader=None, capture_mode='path', is_detour=False):
         self.config = config
+        self.is_detour = is_detour
         self.logic = config.get('logic', {})
         self.zone_mgr = zone_manager
         self.fps = fps
@@ -1232,7 +1243,6 @@ class EventManager:
         self.min_water_hit_frames_for_wash = int(self.logic.get('min_water_hit_frames_for_wash', 30))
         self.water_window_size = int(self.logic.get('water_window_size', 20))
         self.water_window_min_hits = int(self.logic.get('water_window_min_hits', 3))
-        self.type34_min_interval = int(config.get('type34_min_interval_frames', 5))
         self.vehicle_shrink_ratio = float(config.get('vehicle_shrink_ratio', 0.35))
         self.vehicle_lock_min_votes = int(config.get('vehicle_lock_min_votes', 80))
         self.vehicle_lock_on_confirm = bool(config.get('vehicle_lock_on_confirm', True))
@@ -1264,19 +1274,17 @@ class EventManager:
         self.min_type5_zone_a_dwell = int(self.logic.get('min_zone_a_dwell_frames_for_type5', 0))
         if self.min_type5_zone_a_dwell < 0:
             self.min_type5_zone_a_dwell = 0
-        self.min_type1_track_frames = int(self.logic.get('min_track_frames_for_type1', 0))
-        if self.min_type1_track_frames < 0:
-            self.min_type1_track_frames = 0
+        self.min_type1_track_frames = int(self.logic.get('min_track_frames_for_type1', 10))
+        if self.min_type1_track_frames < 10:
+            self.min_type1_track_frames = 10
         self.wash_dwell_offset = 0.0
         self.min_type4_zone_b_dwell = int(self.logic.get('min_zone_b_dwell_frames_for_type4', 60))
         if self.min_type4_zone_b_dwell < 0:
             self.min_type4_zone_b_dwell = 0
-        allowed = config.get('allowed_event_types')
-        if allowed:
-            self.allowed_events = set(int(x) for x in allowed)
-        else:
-            self.allowed_events = {1, 2, 3, 4, 5}
-        self.allowed_events.add(6)
+        self.allowed_events = {1, 2, 3, 4, 5, 6}
+        if self.is_detour:
+            # For detour lane, we don't need type 3 (wash start) and 4 (wash end)
+            self.allowed_events = {1, 2, 5, 6}
         self.disable_plate_only_events = True
         self.single_lifecycle_events = True
         self.require_vehicle_type_for_events = bool(self.logic.get('require_vehicle_type_for_events', False))
@@ -1312,6 +1320,9 @@ class EventManager:
                      water_boxes, water_active, is_plate, vehicle_label, vehicle_conf,
                      plate_conf, confirmed, cleaning_label='', anchor_point=None, plate_is_guess=False):
         if track_id <= 0:
+            return
+        # Avoid creating a parallel lifecycle keyed only by plate_id.
+        if self.disable_plate_only_events and is_plate and track_id not in self.tracks and vehicle_box is None:
             return
         st = self.tracks.setdefault(track_id, {
             'events': set(),
@@ -1520,7 +1531,8 @@ class EventManager:
         water_ready = st.get('water_hit_frames', 0) >= self.min_water_hit_frames_for_wash
         stationary_ready = (self.stationary_min_frames > 0 and
                             st['stationary_frames'] >= self.stationary_min_frames)
-        trigger_ready = bool(water_ready)
+        water_seconds = st.get('effective_wash_frames', 0) / max(self.fps, 1e-6)
+        trigger_ready = bool(candidate_active and water_seconds >= 5.0)
         if water_signal:
             st['water_detected'] = True
         was_washing = bool(st.get('washing'))
@@ -1555,8 +1567,7 @@ class EventManager:
                     st['events'].add(1)
             self.emit_event(track_id, 2, frame_idx, frame, {'captureTime': timestamp}, st)
             st['events'].add(2)
-        if event_enabled and just_confirmed and 3 in self.allowed_events \
-                and self._type_event_interval_ok(st, 3, frame_idx):
+        if event_enabled and just_confirmed and 3 in self.allowed_events:
             self.emit_event(track_id, 3, frame_idx, frame, {
                 'captureTime': timestamp,
                 'washStartTime': timestamp,
@@ -1568,7 +1579,7 @@ class EventManager:
         if zone_flags.get('exit_b'):
             if st.get('zone_b_dwell_frames', 0) >= self.min_type4_zone_b_dwell:
                 can_type4 = True
-        if event_enabled and can_type4 and 4 in self.allowed_events and self._type_event_interval_ok(st, 4, frame_idx):
+        if event_enabled and can_type4 and 4 in self.allowed_events:
             st['wash_end_time'] = st.get('wash_end_time') or timestamp
             duration_val = self._compute_effective_wash_duration(st, frame_idx)
             st['wash_duration'] = duration_val
@@ -1687,15 +1698,14 @@ class EventManager:
                 event_enabled = bool(st.get('zone_a_dwell_frames', 0) > 0)
                 if 4 not in st['events'] and 4 in self.allowed_events and event_enabled and st.get('water_detected') and st.get('zone_b_dwell_frames', 0) > 0:
                     last_frame = st.get('last_frame_idx', frame_idx)
-                    if self._type_event_interval_ok(st, 4, last_frame):
-                        st['wash_end_time'] = st.get('wash_end_time') or self.frame_timestamp(last_frame)
-                        duration_val = self._compute_effective_wash_duration(st, last_frame)
-                        st['wash_duration'] = duration_val
-                        self.emit_event(tid, 4, last_frame, st.get('last_frame'), {
-                            'captureTime': self.frame_timestamp(last_frame),
-                            'washDuration': round(duration_val, 2),
-                        }, st)
-                        st['events'].add(4)
+                    st['wash_end_time'] = st.get('wash_end_time') or self.frame_timestamp(last_frame)
+                    duration_val = self._compute_effective_wash_duration(st, last_frame)
+                    st['wash_duration'] = duration_val
+                    self.emit_event(tid, 4, last_frame, st.get('last_frame'), {
+                        'captureTime': self.frame_timestamp(last_frame),
+                        'washDuration': round(duration_val, 2),
+                    }, st)
+                    st['events'].add(4)
                 can_type5 = True
                 if self.min_type5_zone_a_dwell > 0:
                     if st.get('zone_a_dwell_frames', 0) < self.min_type5_zone_a_dwell:
@@ -1927,40 +1937,9 @@ class EventManager:
                 sent_now = False
                 is_abnormal = bool(api_payload.get('isAbnormal'))
                 if event_type == 1:
-                    buffer = self.upload_buffer.pop(track_key, [])
+                    buffer = self.upload_buffer.setdefault(track_key, [])
                     buffer.append(api_payload)
-                    self.upload_qualified.add(track_key)
-                    for p in buffer:
-                        try:
-                            self.uploader.enqueue(p)
-                        except Exception:
-                            continue
-                        sent_now = True
-                        if self.upload_log_sent:
-                            try:
-                                text = json.dumps(p, ensure_ascii=False)
-                                with self.upload_log_sent.open('a', encoding='utf-8') as f:
-                                    f.write(f"{event['captureTime']},{track_key},{event_type},{text}\n")
-                            except Exception:
-                                pass
                 elif event_type == 2:
-                    buffer = self.upload_buffer.pop(track_key, [])
-                    buffer.append(api_payload)
-                    self.upload_qualified.add(track_key)
-                    for p in buffer:
-                        try:
-                            self.uploader.enqueue(p)
-                        except Exception:
-                            continue
-                        sent_now = True
-                        if self.upload_log_sent:
-                            try:
-                                text = json.dumps(p, ensure_ascii=False)
-                                with self.upload_log_sent.open('a', encoding='utf-8') as f:
-                                    f.write(f"{event['captureTime']},{track_key},{event_type},{text}\n")
-                            except Exception:
-                                pass
-                elif is_abnormal and track_key not in self.upload_qualified:
                     buffer = self.upload_buffer.pop(track_key, [])
                     buffer.append(api_payload)
                     self.upload_qualified.add(track_key)
@@ -2112,15 +2091,6 @@ class EventManager:
                 return locked
         return fallback or track_state.get('last_vehicle_label', '') or ''
 
-    def _type_event_interval_ok(self, track_state, event_type, frame_idx):
-        if event_type not in (3, 4):
-            return True
-        key = 'last_type3_frame' if event_type == 3 else 'last_type4_frame'
-        last = track_state.get(key, -1)
-        if last is None:
-            return True
-        return (frame_idx - last) >= self.type34_min_interval
-
     def get_locked_vehicle(self, track_id):
         st = self.tracks.get(track_id)
         if not st:
@@ -2159,15 +2129,6 @@ class EventManager:
                 return locked
         return fallback or track_state.get('last_vehicle_label', '') or ''
 
-    def _type_event_interval_ok(self, track_state, event_type, frame_idx):
-        if event_type not in (3, 4):
-            return True
-        key = 'last_type3_frame' if event_type == 3 else 'last_type4_frame'
-        last = track_state.get(key, -1)
-        if last is None:
-            return True
-        return (frame_idx - last) >= self.type34_min_interval
-
     def _prepare_capture_image(self, capture_path):
         if not capture_path:
             return ''
@@ -2183,20 +2144,29 @@ class EventManager:
         if not self.uploader:
             return None
         evt_type = event['type']
+        raw_vehicle_type = event.get('vehicleType') or self._resolve_vehicle_type(track_state)
+        vehicle_type_cn = VEHICLE_LABEL_CN.get(raw_vehicle_type, raw_vehicle_type or '')
+        capture_time = event.get('captureTime') or self.frame_timestamp(frame_idx)
+        lane = self.lane_name
+        plate_number = event.get('plateNumber', '')
+        if not plate_number and track_state:
+            plate_number = track_state.get('plate_text', '')
+
         if evt_type == 6:
             return {
                 'id': event['id'],
                 'type': evt_type,
-                'lane': self.lane_name,
+                'lane': lane,
+                'captureTime': capture_time,
+                'plateNumber': plate_number,
+                'vehicleType': vehicle_type_cn,
+                'isAbnormal': False,
+                'abnormalReason': ''
             }
-        plate_conf = round(self._avg(track_state.get('plate_conf_history')), 3)
-        vehicle_conf = round(self._avg(track_state.get('vehicle_conf_history')), 3)
-        raw_vehicle_type = event.get('vehicleType') or self._resolve_vehicle_type(track_state)
-        vehicle_type_cn = VEHICLE_LABEL_CN.get(raw_vehicle_type, raw_vehicle_type or '')
-        capture_time = event['captureTime']
+        
+        plate_conf = round(self._avg(track_state.get('plate_conf_history')), 3) if track_state else 0.0
+        vehicle_conf = round(self._avg(track_state.get('vehicle_conf_history')), 3) if track_state else 0.0
         capture_image = self._prepare_capture_image(event.get('captureImage'))
-        lane = self.lane_name
-        plate_number = event.get('plateNumber', '')
         plate_color = event.get('plateColor', self.default_plate_color)
         plate_color_conf = event.get('plateColorConfidence', self.default_plate_color_conf)
         plate_is_guess = event.get('plateIsGuess', False)
@@ -2213,7 +2183,10 @@ class EventManager:
             dir_code, dir_label = self._resolve_direction(track_state)
             wash_end_time = track_state.get('wash_end_time') or capture_time
             video_end_time = self.frame_timestamp(track_state.get('last_frame_idx', frame_idx))
-            total_wash_duration = round(track_state.get('wash_duration', 0.0), 2)
+            if self.is_detour:
+                total_wash_duration = 0.0
+            else:
+                total_wash_duration = round(track_state.get('wash_duration', 0.0), 2)
             cleanliness = self.default_cleanliness
             video_duration = event.get('videoDuration')
         payload = {}
@@ -2272,6 +2245,8 @@ class EventManager:
             payload['plateIsGuess'] = plate_is_guess
             if wash_start_time:
                 payload['washStartTime'] = wash_start_time
+        payload['isAbnormal'] = False
+        payload['abnormalReason'] = ''
         if reasons:
             if isinstance(reasons, set):
                 reasons_list = sorted(reasons)
@@ -2324,9 +2299,13 @@ class DetectWorker(threading.Thread):
             lpr_path = Path(lpr_path)
             if lpr_path.exists():
                 lpr = RKNNLite()
-                if lpr.load_rknn(str(lpr_path)) == 0 and lpr.init_runtime() == 0:
+                lpr_mask = parse_core_mask(getattr(args, 'lpr_core_mask', None))
+                lpr_init_kwargs = {}
+                if lpr_mask is not None:
+                    lpr_init_kwargs['core_mask'] = lpr_mask
+                if lpr.load_rknn(str(lpr_path)) == 0 and lpr.init_runtime(**lpr_init_kwargs) == 0:
                     self.lpr = lpr
-                    print(f'Worker {idx}: LPR model loaded from {lpr_path}')
+                    print(f'Worker {idx}: LPR model loaded from {lpr_path} with core_mask={lpr_mask}')
                 else:
                     print(f'Worker {idx}: failed to init LPR model {lpr_path}')
             else:
@@ -2550,6 +2529,8 @@ def process_video(path, args):
         (flow_start, flow_end),
         entry_hysteresis=int(logic_cfg.get('zone_b_entry_hysteresis', 3)),
         exit_hysteresis=int(logic_cfg.get('zone_b_exit_hysteresis', 3)),
+        zone_a_entry_hysteresis=int(logic_cfg.get('zone_a_entry_hysteresis', 3)),
+        zone_a_exit_hysteresis=int(logic_cfg.get('zone_a_exit_hysteresis', 3)),
     )
     detect_mask = None
     if logic_cfg.get('zone_a_mask_enable', True) and len(zone_a_pts) >= 3:
@@ -2610,8 +2591,9 @@ def process_video(path, args):
         queue_db = Path(config.get('event_output_dir', './events')) / 'upload_queue.db'
         uploader = EventUploader(args.api_url, getattr(args, 'api_token', None), queue_path=queue_db)
     capture_mode = getattr(args, 'capture_mode', 'path')
+    is_detour = getattr(args, 'is_detour', False)
     event_manager = EventManager(config, fps, (width, height), zone_mgr, event_log_path, uploader=uploader,
-                                 capture_mode=capture_mode)
+                                 capture_mode=capture_mode, is_detour=is_detour)
     if args.csv or output_dir:
         csv_path = args.csv
         if csv_path and os.path.isdir(csv_path):
@@ -3094,11 +3076,10 @@ def process_video(path, args):
                         stop_f = st.get('record_stop_frame')
                         if start_f is None:
                             continue
-                        if stop_f is not None and next_frame_to_write > stop_f:
-                            close_per_id_writer(tid, st)
-                            continue
                         if next_frame_to_write < start_f:
                             continue
+                        # Premature close removed to prevent video fragmentation. 
+                        # We rely on flush_inactive to close the writer when the track is gone.
                         writer = per_id_writers.get(tid)
                         if writer is None:
                             st_capture_time = st.get('type1_capture_time')

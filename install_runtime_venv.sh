@@ -127,17 +127,6 @@ EOF
     if [ -n "$RKNN_WHL" ]; then
       "$PYTHON_BIN" -m pip install "$RKNN_WHL"
     fi
-    RGA_SO_SRC="$PACKAGES_DIR/librga.so"
-    if [ -f "$RGA_SO_SRC" ]; then
-      $APT_PREFIX cp -f "$RGA_SO_SRC" /usr/local/lib/librga.so
-      $APT_PREFIX chmod 755 /usr/local/lib/librga.so || true
-      $APT_PREFIX ldconfig || true
-    fi
-    RGA_HDR_SRC="$PACKAGES_DIR/im2d.h"
-    if [ -f "$RGA_HDR_SRC" ]; then
-      $APT_PREFIX mkdir -p /usr/local/include/rga
-      $APT_PREFIX cp -f "$RGA_HDR_SRC" /usr/local/include/rga/im2d.h
-    fi
   fi
   REQ_FILE="$SCRIPT_DIR/requirements.txt"
   if [ -f "$REQ_FILE" ]; then
@@ -148,7 +137,6 @@ try:
     import rga  # type: ignore
 except Exception:
     print("[setup] Python module 'rga' not found (optional, can be ignored).")
-    print("[setup] 当前方案使用系统库 librga.so + rga_resize_plugin.py 实现 RGA 预处理。")
 try:
     from rknnlite.api import RKNNLite  # type: ignore
     print("[setup] RKNNLite 可用。")

@@ -36,8 +36,13 @@ class ZoneManager:
     zone_a: List[Tuple[float, float]]
     zone_b: List[Tuple[float, float]]
     flow_vector: Tuple[Tuple[float, float], Tuple[float, float]]
+
     entry_hysteresis: int = 3
     exit_hysteresis: int = 3
+
+    zone_a_entry_hysteresis: int = 3
+    zone_a_exit_hysteresis: int = 3
+
     state_cache: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -70,11 +75,21 @@ class ZoneManager:
         state: ZoneState = st['state']
         state.last_anchor = anchor_point
 
-        inside_a = point_in_polygon(anchor_point, self.zone_a)
+        inside_a_raw = point_in_polygon(anchor_point, self.zone_a)
         inside_b = point_in_polygon(anchor_point, self.zone_b)
 
-        enter_a = inside_a and not state.inside_a
-        exit_a = (not inside_a) and state.inside_a
+        st['a_entry_counter'] = min(self.zone_a_entry_hysteresis, st.get('a_entry_counter', 0) + 1) if inside_a_raw else 0
+        st['a_exit_counter'] = min(self.zone_a_exit_hysteresis, st.get('a_exit_counter', 0) + 1) if (not inside_a_raw) else 0
+
+        inside_a = state.inside_a
+        enter_a = False
+        exit_a = False
+        if st['a_entry_counter'] >= self.zone_a_entry_hysteresis and not state.inside_a:
+            inside_a = True
+            enter_a = True
+        elif st['a_exit_counter'] >= self.zone_a_exit_hysteresis and state.inside_a:
+            inside_a = False
+            exit_a = True
         if enter_a:
             state.enter_ratio = self._relative_position(anchor_point)
             state.entry_point = anchor_point

@@ -154,7 +154,28 @@ class InferenceManager:
         self.single_shot = self._detect_single_shot()
         if self.single_shot:
             self._append_log('[guardian] file source detected，本次推理完成后不会自动重启')
+        
+        # Build command with core masks and detour flag from config
         cmd = [sys.executable, str(self.script_path), "--config", str(self.config_path)]
+        try:
+            with self.config_path.open('r', encoding='utf-8') as f:
+                data = json.load(f)
+                video_cfg = data.get('video', {})
+                logic_cfg = data.get('logic', {})
+                
+                core_mask = video_cfg.get('core_mask')
+                if core_mask is not None:
+                    cmd.extend(["--core_mask", str(core_mask)])
+                
+                lpr_core_mask = logic_cfg.get('lpr_core_mask') or video_cfg.get('lpr_core_mask')
+                if lpr_core_mask is not None:
+                    cmd.extend(["--lpr_core_mask", str(lpr_core_mask)])
+                    
+                if logic_cfg.get('is_detour'):
+                    cmd.append("--is_detour")
+        except Exception as e:
+            self._append_log(f'[guardian] warning: failed to parse config for extra args: {e}')
+
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         self.process = proc
         self.restart_count += 1
@@ -614,27 +635,6 @@ def get_per_id_video(path: str):
 def read_config():
     cfg = _load_config()
     return cfg.data
-
-
-@app.post("/config/save_as")
-def save_config_as(payload: ConfigSaveAsPayload):
-    name = str(payload.name or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="文件名不能为空")
-    if any(sep in name for sep in ("/", "\\")):
-        raise HTTPException(status_code=400, detail="文件名不能包含路径分隔符")
-    if not name.lower().endswith(".json"):
-        name = f"{name}.json"
-    base = CONFIG_PATH.parent
-    target = (base / name).resolve()
-    if target.exists():
-        raise HTTPException(status_code=409, detail="配置文件已存在")
-    try:
-        with target.open("w", encoding="utf-8") as f:
-            json.dump(payload.data, f, ensure_ascii=False, indent=2)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"保存失败: {exc}") from exc
-    return {"saved_as": target.name}
 
 
 @app.post("/config/save_as")

@@ -1,24 +1,26 @@
 {
   "system": {
-    "device_id": "RK3588-DEV",
+    "device_id": "RK3588-DETOUR",
     "api": {
       "url": "http://127.0.0.1:28014/api/vehicle/wash-event",
       "token": "",
       "capture_mode": "base64"
     },
     "monitor_interval": 10,
-    "metrics_path": "/dev/shm/metrics_laneA.json",
+    "metrics_path": "/dev/shm/metrics_detour.json",
     "cpu_mask": ""
   },
   "video": {
-    "source": "rtsp://admin:yanya999@192.168.1.111:554/stream1",
+    "source": "rtsp://admin:yanya999@192.168.1.111:554/stream2",
     "source_mode": "camera",
     "hw_decode": false,
-    "workers": 3,
-    "core_mask": "0-1",
+    "workers": 2,
+    "core_mask": "1",
+    "lpr_model": "lprnet.rknn",
+    "lpr_core_mask": "4",
     "save_video": "",
-    "csv": "./video_result/test.csv",
-    "debug_frame_path": "/dev/shm/cleaningcar_debug_A.jpg",
+    "csv": "./video_result/detour.csv",
+    "debug_frame_path": "/dev/shm/detour_debug.jpg",
     "debug_frame_interval": 30,
     "segment_minutes": 60,
     "debug_frame_max_width": 960,
@@ -26,53 +28,24 @@
   },
   "zones": {
     "zone_a_detection": [
-      [
-        0.4246,
-        0.991
-      ],
-      [
-        0.4381,
-        0.2907
-      ],
-      [
-        0.5943,
-        0.2907
-      ],
-      [
-        0.9941,
-        0.991
-      ]
+      [0.4246, 0.991],
+      [0.4381, 0.2907],
+      [0.5943, 0.2907],
+      [0.9941, 0.991]
     ],
     "zone_b_wash": [
-      [
-        0.4436,
-        0.5828
-      ],
-      [
-        0.6959,
-        0.568
-      ],
-      [
-        0.9482,
-        0.9536
-      ],
-      [
-        0.4492,
-        0.9815
-      ]
+      [0.4436, 0.5828],
+      [0.6959, 0.568],
+      [0.9482, 0.9536],
+      [0.4492, 0.9815]
     ],
     "flow_vector": {
-      "start": [
-        0.5928,
-        0.5329
-      ],
-      "end": [
-        0.6821,
-        0.9273
-      ]
+      "start": [0.5928, 0.5329],
+      "end": [0.6821, 0.9273]
     }
   },
   "logic": {
+    "is_detour": true,
     "detection_anchor": "bottom_center",
     "zone_a_mask_enable": false,
     "zone_a_entry_hysteresis": 3,
@@ -84,7 +57,7 @@
     "type34_min_interval_frames": 60,
     "track_timeout_frames": 80,
     "track_max_age": 100,
-    "lane_name": "冲洗",
+    "lane_name": "绕行道",
     "vehicle_shrink_ratio": 0.35,
     "vehicle_lock_min_votes": 40,
     "vehicle_lock_on_confirm": true,
@@ -97,14 +70,7 @@
       "max_candidates": 50,
       "max_age_frames": 120
     },
-    "allowed_event_types": [
-      1,
-      2,
-      3,
-      4,
-      5,
-      6
-    ],
+    "allowed_event_types": [1, 2, 5, 6],
     "debug_overlay": true,
     "debug_track_state": true,
     "debug_anchor_points": true,
@@ -125,9 +91,10 @@
     "min_zone_b_dwell_frames_for_type4": 60,
     "enable_global_video": false,
     "enable_per_id_video": true,
-    "per_id_video_dir": "/data/ftp/per_id",
+    "per_id_video_dir": "./video_result/detour",
     "per_id_downscale_ratio": 1,
     "per_id_frame_stride": 1,
+    "per_id_fps": 20,
     "per_id_auto_adapt": false,
     "per_id_auto_cpu_high": 75,
     "per_id_auto_cpu_low": 50,
@@ -139,7 +106,7 @@
     "disk_target": 50,
     "clean_interval_seconds": 600
   },
-  "event_output_dir": "events/config",
-  "event_capture_dir": "captures/config",
+  "event_output_dir": "events/detour",
+  "event_capture_dir": "captures/detour",
   "event_capture_quality": 85
 }

@@ -77,6 +77,8 @@ class ConfigManager:
         logic.setdefault('zone_a_mask_enable', True)
         logic.setdefault('zone_b_entry_hysteresis', 3)
         logic.setdefault('zone_b_exit_hysteresis', 3)
+        logic.setdefault('zone_a_entry_hysteresis', 3)
+        logic.setdefault('zone_a_exit_hysteresis', 3)
         logic.setdefault('stationary_min_frames', 0)
         logic.setdefault('stationary_speed_thresh', 8.0)
         logic.setdefault('type34_min_interval_frames', 5)
