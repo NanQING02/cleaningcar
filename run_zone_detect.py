@@ -904,6 +904,13 @@ def enhance_plate_patch(patch, enable_deskew=False, max_abs_angle=20.0):
 def decode_lpr_output(pred):
     if pred is None:
         return ''
+    text, _ = decode_lpr_output_with_conf(pred)
+    return text
+
+
+def decode_lpr_output_with_conf(pred):
+    if pred is None:
+        return '', 0.0
     arr = pred
     if arr.ndim == 3:
         if arr.shape[1] != len(LPR_CHARS):
@@ -912,18 +919,29 @@ def decode_lpr_output(pred):
     elif arr.ndim == 2:
         arr = arr
     else:
-        return ''
+        return '', 0.0
+
     prev = LPR_BLANK
     chars = []
+    confs = []
     for t in range(arr.shape[1]):
-        c = int(np.argmax(arr[:, t]))
+        col = arr[:, t]
+        c = int(np.argmax(col))
+        p = float(col[c]) if c >= 0 else 0.0
         if c == LPR_BLANK:
             prev = c
             continue
         if c != prev:
             chars.append(LPR_CHARS[c])
+            confs.append(p)
         prev = c
-    return ''.join(chars)
+    if not chars:
+        return '', 0.0
+    # Confidence: mean max-prob of emitted chars, slightly penalize very short strings.
+    conf = float(sum(confs) / max(1, len(confs)))
+    if len(chars) < 6:
+        conf *= 0.8
+    return ''.join(chars), max(0.0, min(1.0, conf))
 
 
 def normalize_plate_text(text):
@@ -970,6 +988,7 @@ class PlateTextTracker:
         results = []
         det_boxes = [np.array(det['box'], dtype=float) for det in detections]
         det_texts = [normalize_plate_text(det.get('text', '')) for det in detections]
+        det_confs = [float(det.get('plate_conf', 0.0) or 0.0) for det in detections]
         track_ids = list(self.tracks.keys())
         iou_matrix = None
         if track_ids and det_boxes:
@@ -992,6 +1011,7 @@ class PlateTextTracker:
                         'last_seen': frame_idx,
                         'age': 0,
                         'history': [],
+                        'conf_history': [],
                         'locked': '',
                     }
                     if tid >= self.next_id:
@@ -1016,18 +1036,30 @@ class PlateTextTracker:
         for tid, det_idx in assigned_tracks.items():
             det_box = det_boxes[det_idx]
             det_text = det_texts[det_idx]
+            det_conf = det_confs[det_idx] if det_idx < len(det_confs) else 0.0
             track = self.tracks[tid]
             track['box'] = det_box
             track['last_seen'] = frame_idx
             track['age'] = 0
             if is_valid_plate(det_text):
                 track['history'].append(det_text)
+                track.setdefault('conf_history', []).append(float(det_conf))
                 if len(track['history']) > 30:
                     track['history'].pop(0)
-                counts = Counter(track['history'])
-                best_text, cnt = counts.most_common(1)[0]
-                if cnt >= self.lock_frames:
-                    track['locked'] = best_text
+                if len(track.get('conf_history', [])) > 30:
+                    track['conf_history'].pop(0)
+
+                # Weighted vote: sum confidence per candidate plate string.
+                score_map = {}
+                for txt, cf in zip(track['history'], track.get('conf_history', [])):
+                    if not txt:
+                        continue
+                    score_map[txt] = score_map.get(txt, 0.0) + float(cf)
+                if score_map:
+                    best_text = max(score_map.items(), key=lambda kv: (kv[1], kv[0]))[0]
+                    # Require enough repeated observations before locking.
+                    if track['history'].count(best_text) >= self.lock_frames:
+                        track['locked'] = best_text
         # create new tracks for unmatched dets
         for di, det_box in enumerate(det_boxes):
             if di in assigned_dets:
@@ -1039,11 +1071,13 @@ class PlateTextTracker:
             locked = ''
             if is_valid_plate(det_text):
                 history.append(det_text)
+            conf_hist = [float(det_confs[di]) if di < len(det_confs) else 0.0] if history else []
             self.tracks[tid] = {
                 'box': det_box,
                 'last_seen': frame_idx,
                 'age': 0,
                 'history': history,
+                'conf_history': conf_hist,
                 'locked': locked,
             }
             assigned_tracks[tid] = di
@@ -2481,6 +2515,7 @@ class EventManager:
                 with open(capture_path, 'rb') as f:
                     return base64.b64encode(f.read()).decode('utf-8')
             except Exception:
+                self.last_plate_conf = 0.0
                 return ''
         return capture_path
 
@@ -2637,6 +2672,7 @@ class DetectWorker(threading.Thread):
         self.infer_time = 0.0
         self.stop = False
         self.lpr = None
+        self.last_plate_conf = 0.0
         self.plate_expand = max(0.0, getattr(args, 'plate_expand', PLATE_EXPAND_DEFAULT))
         self.plate_deskew = bool(getattr(args, 'plate_deskew', False))
         self.plate_deskew_max_angle = float(getattr(args, 'plate_deskew_max_angle', 20.0))
@@ -2722,8 +2758,10 @@ class DetectWorker(threading.Thread):
             for box, score, cls_id, cls_prob in zip(boxes, scores, classes, cls_probs):
                 x1, y1, x2, y2 = box.astype(int)
                 plate_text = ''
+                plate_conf = 0.0
                 if cls_id == LICENSE_CLASS and self.lpr is not None:
                     plate_text = self.recognize_plate(base_frame, (x1, y1, x2, y2))
+                    plate_conf = float(getattr(self, 'last_plate_conf', 0.0) or 0.0)
                 label_name = CLASS_NAMES[cls_id]
                 label = f'{label_name} {cls_prob:.2f}'
                 draw_now = True
@@ -2740,6 +2778,7 @@ class DetectWorker(threading.Thread):
                     'score': float(score),
                     'box': [int(x1), int(y1), int(x2), int(y2)],
                     'text': plate_text,
+                    'plate_conf': float(plate_conf),
                     'row_idx': len(csv_rows) - 1,
                     'label': label_name,
                 })
@@ -2766,7 +2805,8 @@ class DetectWorker(threading.Thread):
             outputs = self.lpr.inference(inputs=[np.expand_dims(patch, 0)], data_format=['nhwc'])
             if not outputs:
                 return ''
-            text = decode_lpr_output(outputs[0])
+            text, conf = decode_lpr_output_with_conf(outputs[0])
+            self.last_plate_conf = conf
             return text
         except Exception:
             return ''
