@@ -183,6 +183,12 @@ class InferenceManager:
                     
                 if logic_cfg.get('is_detour'):
                     cmd.append("--is_detour")
+
+                if logic_cfg.get('plate_deskew'):
+                    cmd.append("--plate_deskew")
+                plate_deskew_max_angle = logic_cfg.get('plate_deskew_max_angle')
+                if plate_deskew_max_angle is not None:
+                    cmd.extend(["--plate_deskew_max_angle", str(plate_deskew_max_angle)])
         except Exception as e:
             self._append_log(f'[guardian] warning: failed to parse config for extra args: {e}')
 

@@ -65,6 +65,8 @@
     "vehicle_lock_min_votes": 40,
     "vehicle_lock_on_confirm": true,
     "plate_lock_frames": 5,
+    "plate_deskew": true,
+    "plate_deskew_max_angle": 20,
     "default_plate_color": "",
     "default_plate_color_conf": 0,
     "default_cleanliness": 0,

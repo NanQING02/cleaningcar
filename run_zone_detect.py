@@ -431,6 +431,8 @@ def parse_args():
     ap.add_argument('--limit', type=int, default=0, help='Optional frame limit for quick tests.')
     ap.add_argument('--lpr_model', default='lprnet.rknn', help='Path to license plate recognition RKNN.')
     ap.add_argument('--plate_expand', type=float, default=PLATE_EXPAND_DEFAULT, help='Extra ratio padding for plate crops.')
+    ap.add_argument('--plate_deskew', action='store_true', help='Enable plate deskew preprocessing (recommended for detour lane).')
+    ap.add_argument('--plate_deskew_max_angle', type=float, default=20.0, help='Max absolute deskew angle (degrees).')
     ap.add_argument('--plate_lock_frames', type=int, default=5, help='Frames required before plate text is locked.')
     ap.add_argument('--config', help='YAML config describing ROI/event logic.')
     ap.add_argument('--camera', help='当配置包含多个 camera 条目时，指定要运行的 key。')
@@ -810,17 +812,62 @@ def point_in_box(pt, box):
     return (box[0] <= x <= box[2]) and (box[1] <= y <= box[3])
 
 
-def extract_plate_patch(frame, box, expand_ratio):
+def _rotate_bound(image, angle_deg):
+    if image is None or image.size == 0:
+        return None
+    h, w = image.shape[:2]
+    cx, cy = (w / 2.0, h / 2.0)
+    M = cv2.getRotationMatrix2D((cx, cy), float(angle_deg), 1.0)
+    cos = abs(M[0, 0])
+    sin = abs(M[0, 1])
+    nW = int((h * sin) + (w * cos))
+    nH = int((h * cos) + (w * sin))
+    M[0, 2] += (nW / 2.0) - cx
+    M[1, 2] += (nH / 2.0) - cy
+    return cv2.warpAffine(image, M, (nW, nH), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+
+
+def _estimate_plate_angle(patch_bgr):
+    if patch_bgr is None or patch_bgr.size == 0:
+        return 0.0
+    gray = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    edges = cv2.Canny(gray, 50, 150)
+    cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return 0.0
+    cnt = max(cnts, key=cv2.contourArea)
+    if cv2.contourArea(cnt) < 10:
+        return 0.0
+    rect = cv2.minAreaRect(cnt)
+    (w, h) = rect[1]
+    if w <= 1 or h <= 1:
+        return 0.0
+    angle = float(rect[2])
+    if w < h:
+        angle = angle + 90.0
+    if angle > 45.0:
+        angle -= 90.0
+    if angle < -45.0:
+        angle += 90.0
+    return angle
+
+
+def extract_plate_patch(frame, box, expand_ratio, is_detour=False):
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = box
     cx = 0.5 * (x1 + x2)
     cy = 0.5 * (y1 + y2)
-    bw = (x2 - x1)
-    bh = (y2 - y1)
-    bw = max(bw, 4)
-    bh = max(bh, 4)
-    bw *= (1.0 + expand_ratio)
-    bh *= (1.0 + expand_ratio * 0.5)
+    bw = max((x2 - x1), 4)
+    bh = max((y2 - y1), 4)
+
+    # Detour lane often has oblique plates; use a bit more padding.
+    expand = float(expand_ratio)
+    if is_detour:
+        expand = max(expand, expand + 0.15)
+
+    bw *= (1.0 + expand)
+    bh *= (1.0 + expand * 0.7)
     nx1 = max(0, int(cx - bw / 2))
     ny1 = max(0, int(cy - bh / 2))
     nx2 = min(w - 1, int(cx + bw / 2))
@@ -830,12 +877,20 @@ def extract_plate_patch(frame, box, expand_ratio):
     return frame[ny1:ny2, nx1:nx2]
 
 
-def enhance_plate_patch(patch):
+def enhance_plate_patch(patch, enable_deskew=False, max_abs_angle=20.0):
     if patch is None or patch.size == 0:
         return None
     # Rotate if taller than wide (rare but possible after crop)
     if patch.shape[0] > patch.shape[1] * 1.2:
         patch = cv2.rotate(patch, cv2.ROTATE_90_CLOCKWISE)
+
+    if enable_deskew:
+        angle = _estimate_plate_angle(patch)
+        if abs(angle) <= float(max_abs_angle):
+            rotated = _rotate_bound(patch, -angle)
+            if rotated is not None and rotated.size != 0:
+                patch = rotated
+
     patch = cv2.resize(patch, PLATE_SIZE, interpolation=cv2.INTER_LINEAR)
     lab = cv2.cvtColor(patch, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
@@ -2583,6 +2638,9 @@ class DetectWorker(threading.Thread):
         self.stop = False
         self.lpr = None
         self.plate_expand = max(0.0, getattr(args, 'plate_expand', PLATE_EXPAND_DEFAULT))
+        self.plate_deskew = bool(getattr(args, 'plate_deskew', False))
+        self.plate_deskew_max_angle = float(getattr(args, 'plate_deskew_max_angle', 20.0))
+        self.plate_detour_expand_boost = float(getattr(args, 'plate_detour_expand_boost', 0.15))
         lpr_path = getattr(args, 'lpr_model', None)
         if lpr_path:
             lpr_path = Path(lpr_path)
@@ -2691,8 +2749,18 @@ class DetectWorker(threading.Thread):
 
     def recognize_plate(self, frame, box):
         try:
-            crop = extract_plate_patch(frame, box, self.plate_expand)
-            patch = enhance_plate_patch(crop)
+            is_detour = bool(getattr(self.args, 'is_detour', False))
+            crop = extract_plate_patch(
+                frame,
+                box,
+                self.plate_expand,
+                is_detour=is_detour,
+            )
+            patch = enhance_plate_patch(
+                crop,
+                enable_deskew=self.plate_deskew and is_detour,
+                max_abs_angle=self.plate_deskew_max_angle,
+            )
             if patch is None:
                 return ''
             outputs = self.lpr.inference(inputs=[np.expand_dims(patch, 0)], data_format=['nhwc'])
