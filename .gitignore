@@ -1,0 +1,30 @@
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Virtualenv
+venv-gst/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Runtime outputs (never commit)
+logs/
+events/
+captures/
+video_result/
+*.log
+*.pid
+web_server_*.log
+web_server_*.pid
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / local env
+.env
+.env.*

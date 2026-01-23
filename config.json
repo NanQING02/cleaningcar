@@ -1,0 +1,143 @@
+{
+  "system": {
+    "device_id": "RK3588-DEV",
+    "api": {
+      "url": "http://127.0.0.1:28014/api/vehicle/wash-event",
+      "token": "",
+      "capture_mode": "base64"
+    },
+    "monitor_interval": 10,
+    "metrics_path": "/dev/shm/metrics_laneA.json",
+    "cpu_mask": ""
+  },
+  "video": {
+    "source": "rtsp://admin:yanya999@192.168.1.111:8557/h264",
+    "source_mode": "camera",
+    "hw_decode": false,
+    "workers": 3,
+    "core_mask": "0-1",
+    "save_video": "",
+    "csv": "./video_result/test.csv",
+    "debug_frame_path": "/dev/shm/cleaningcar_debug_A.jpg",
+    "debug_frame_interval": 30,
+    "segment_minutes": 60,
+    "debug_frame_max_width": 960,
+    "debug_frame_quality": 80
+  },
+  "zones": {
+    "zone_a_detection": [
+      [
+        0.2403,
+        0.9977
+      ],
+      [
+        0.244,
+        0.2856
+      ],
+      [
+        0.4418,
+        0.2774
+      ],
+      [
+        0.9941,
+        0.991
+      ]
+    ],
+    "zone_b_wash": [
+      [
+        0.2745,
+        0.6023
+      ],
+      [
+        0.6405,
+        0.5843
+      ],
+      [
+        0.9482,
+        0.9536
+      ],
+      [
+        0.268,
+        0.9928
+      ]
+    ],
+    "flow_vector": {
+      "start": [
+        0.4621,
+        0.5186
+      ],
+      "end": [
+        0.6266,
+        0.9452
+      ]
+    }
+  },
+  "logic": {
+    "detection_anchor": "bottom_center",
+    "zone_a_mask_enable": false,
+    "zone_b_entry_hysteresis": 20,
+    "zone_b_exit_hysteresis": 3,
+    "stationary_min_frames": 0,
+    "stationary_speed_thresh": 8,
+    "type34_min_interval_frames": 60,
+    "track_timeout_frames": 80,
+    "track_max_age": 100,
+    "lane_name": "冲洗",
+    "vehicle_shrink_ratio": 0.35,
+    "vehicle_lock_min_votes": 40,
+    "vehicle_lock_on_confirm": true,
+    "plate_lock_frames": 5,
+    "default_plate_color": "",
+    "default_plate_color_conf": 0,
+    "default_cleanliness": 0,
+    "car_plate_cache_ttl": 150,
+    "shadow_plate_pool": {
+      "max_candidates": 50,
+      "max_age_frames": 120
+    },
+    "allowed_event_types": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "debug_overlay": true,
+    "debug_track_state": true,
+    "debug_anchor_points": true,
+    "debug_water_boxes": true,
+    "no_draw": false,
+    "anchor_offset_ratio": 0.1,
+    "zone_b_anchor_min_frames": 10,
+    "water_window_size": 20,
+    "water_window_min_hits": 3,
+    "wash_duration_offset_seconds": 0,
+    "vehicle_iou_threshold": 0.1,
+    "vehicle_center_gate_ratio": 0.8,
+    "disable_plate_only_events": true,
+    "single_lifecycle_events": true,
+    "min_zone_a_dwell_frames_for_type5": 25,
+    "min_track_frames_for_type1": 5,
+    "require_vehicle_type_for_events": true,
+    "min_zone_b_dwell_frames_for_type4": 60,
+    "enable_global_video": false,
+    "enable_per_id_video": true,
+    "per_id_video_dir": "/data/ftp/per_id",
+    "per_id_downscale_ratio": 1,
+    "per_id_frame_stride": 1,
+    "per_id_auto_adapt": false,
+    "per_id_auto_cpu_high": 75,
+    "per_id_auto_cpu_low": 50,
+    "per_id_max_frame_stride": 3,
+    "enable_event_disk": false
+  },
+  "storage": {
+    "disk_threshold": 65,
+    "disk_target": 50,
+    "clean_interval_seconds": 600
+  },
+  "event_output_dir": "events/config",
+  "event_capture_dir": "captures/config",
+  "event_capture_quality": 85
+}
