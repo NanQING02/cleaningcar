@@ -1,23 +1,30 @@
-packages/Anaconda3-2021.04-Linux-aarch64.sh
-packages/py38_rk3588.tar.gz
-.vscode/
-.logs/
-._pycache_/
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Virtualenv
 venv-gst/
-__pycache__/config_manager.cpython-38.pyc
-__pycache__/config_manager.cpython-312.pyc
-__pycache__/run_zone_detect.cpython-38.pyc
-utils/__pycache__/__init__.cpython-38.pyc
-web/__pycache__/server.cpython-38.pyc
-web/__pycache__/server.cpython-312.pyc
-web_server_8000.log
-web_server_8000.pid
-__pycache__/rga_resize_plugin.cpython-38.pyc
-__pycache__/rga_resize_plugin.cpython-312.pyc
-__pycache__/zone_manager.cpython-38.pyc
-__pycache__/zone_manager.cpython-312.pyc
-utils/__pycache__/
-events/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Runtime outputs (never commit)
 logs/
-video_result/
+events/
 captures/
+video_result/
+*.log
+*.pid
+web_server_*.log
+web_server_*.pid
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / local env
+.env
+.env.*
