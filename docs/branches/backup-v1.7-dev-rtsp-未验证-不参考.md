@@ -1,7 +1,7 @@
 # backup/v1.7-dev-rtsp-未验证-不参考
 
-- 分支：
-- tip：（2026-01-20）
+- 分支：`backup/v1.7-dev-rtsp-未验证-不参考`
+- tip：`8b08969`（2026-01-20）
 - 定位：开发增强线（RTSP/跟踪/车牌识别改进）
 
 相对上一档（backup/v1.6-client-verified）主要变化：
